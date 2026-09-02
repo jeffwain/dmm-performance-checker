@@ -1,7 +1,7 @@
 {
   "id": "dmm-performance-checker",
   "type": "module",
-  "title": "DMM Performance Checker",
+  "title": "The Dice Monster's Miscellany – Performance Checker",
   "description": "Per-module performance forensics for Foundry VTT. Attributes CPU time, frame cost, DOM churn, timers, listeners, network, database writes, memory growth and canvas load to the specific module responsible. Includes live module muting for zero-reload A/B testing and long-session drift tracking.",
   "version": "1.0.0",
   "authors": [

@@ -1,14 +1,14 @@
 # DMM Performance Checker
 
 Per-module performance forensics tool for Foundry VTT v13/v14. Yes, this is built \[entirely\] by
-AI, though I have tested it and verified that it works. Is it going to be 1000% perfect? No. Has
-it helped pinpoint issues in specific modules so that I can dig deeper and make fixes? Yes, yes
-it has.
+AI, though I have tested it and verified that it works. Is it going to be 100% perfect? No. Will it
+point you in the right direction? Absolutely. Has it helped pinpoint issues in specific modules 
+so that I can dig deeper and make fixes? Yes, yes it has.
 
-Other performance tools tell you *that* things are slow, but I wanted one to tell me **which 
-module is doing it** and where. It uses owning `Hooks.on`, `setTimeout`, `addEventListener`, 
+Other performance tools tell you *that* things are slow, but I wanted one to tell me which 
+module is doing it and where. It checks events like `Hooks.on`, `setTimeout`, `addEventListener`, 
 `PIXI.Ticker.add`, `fetch`, `libWrapper.register` and the document write path before any other 
-package loads, and then tracks every subsequent call back to the package that registered it.
+package loads, and then tracks every call back to the source package.
 
 It also lets you mute a module in real-time, blocking callbacks instantly with no reload or 
 logging back in to make testing a suspicion module take twenty seconds instead of thirty minutes.
