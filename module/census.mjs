@@ -38,6 +38,43 @@ export function ms(n) {
 const yieldToUI = () => new Promise((r) => setTimeout(r, 0));
 
 /**
+ * Resolve a package identifier to the thing that actually owns it.
+ *
+ * Two vocabularies arrive here and neither is "a module id":
+ *   - flag namespaces from the world scan, which are bare (`dnd5e`, `core`, `world`);
+ *   - owner ids from stack attribution, which prefix systems (`system:dnd5e`) and collapse
+ *     world scripts to `world-script`.
+ *
+ * Only modules live in `game.modules`, so resolving everything through it labelled the active
+ * system, Foundry core and world-level flags as "not installed" — the exact opposite of the
+ * truth for the one system every document in the world depends on.
+ *
+ * Note the client only ever knows a single system, the active one: there is no `game.systems`.
+ * A namespace naming some *other* system is therefore genuinely dead weight in this world and
+ * is still reported as not installed.
+ */
+export function resolvePackage(id) {
+  const game = globalThis.game;
+  const raw = String(id ?? "");
+
+  if (raw === "core" || raw === "") return { id: "core", title: "Foundry Core", installed: true, active: true, kind: "core" };
+  if (raw === "unattributed") return { id: raw, title: "Unattributed", installed: false, active: false, kind: "unknown" };
+  if (raw === "world" || raw === "world-script") {
+    return { id: raw, title: game?.world?.title ? `World: ${game.world.title}` : "World", installed: true, active: true, kind: "world" };
+  }
+
+  const sys = game?.system;
+  const sysId = raw.startsWith("system:") ? raw.slice(7) : raw;
+  if (sys?.id && sysId === sys.id) {
+    return { id: raw, title: sys.title || sys.data?.title || sysId, installed: true, active: true, kind: "system" };
+  }
+  if (raw.startsWith("system:")) return { id: raw, title: sysId, installed: false, active: false, kind: "system" };
+
+  const mod = game?.modules?.get?.(raw);
+  return { id: raw, title: mod?.title || raw, installed: !!mod, active: !!mod?.active, kind: "module" };
+}
+
+/**
  * Bounded deep-size estimate. Not a real heap measurement — nothing in JS can give you that
  * from inside the page — but it is a solid proxy for "how much stuff is this module holding".
  * Cycle-safe, node-capped, and it reports whether it hit the cap so the number is honest.
@@ -573,15 +610,22 @@ export async function dataCensus(onProgress = () => {}) {
   out.scanned = scanned;
   out.documents.sort((a, b) => b.bytes - a.bytes);
 
-  out.flags = [...flagAgg.values()].map((r) => ({
-    namespace: r.namespace,
-    bytes: r.bytes,
-    docs: r.docs,
-    biggest: r.biggest,
-    byType: [...r.byType.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([t, b]) => `${t} ${bytes(b)}`).join(", "),
-    installed: !!game.modules.get(r.namespace),
-    active: !!game.modules.get(r.namespace)?.active
-  })).sort((a, b) => b.bytes - a.bytes);
+  out.flags = [...flagAgg.values()].map((r) => {
+    // A flag namespace is not necessarily a module: the active system, core and the world
+    // itself all write flags, and none of them are in `game.modules`.
+    const pkg = resolvePackage(r.namespace);
+    return {
+      namespace: r.namespace,
+      bytes: r.bytes,
+      docs: r.docs,
+      biggest: r.biggest,
+      byType: [...r.byType.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([t, b]) => `${t} ${bytes(b)}`).join(", "),
+      owner: pkg.title,
+      kind: pkg.kind,
+      installed: pkg.installed,
+      active: pkg.active
+    };
+  }).sort((a, b) => b.bytes - a.bytes);
   out.totals.flagBytes = out.flags.reduce((a, b) => a + b.bytes, 0);
 
   // --- settings ---------------------------------------------------------------------------

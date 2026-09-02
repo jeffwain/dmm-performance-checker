@@ -471,17 +471,30 @@ section("Analysis module");
 globalThis.game = {
   ready: true,
   modules: new Map([["alpha-mod", { id: "alpha-mod", title: "Alpha", active: true }]]),
+  // The client only ever knows one system: the active one. It is not in `game.modules`.
+  system: { id: "dnd5e", title: "D&D Fifth Edition", version: "5.0.0" },
+  world: { id: "test-world", title: "Test World" },
   version: "14.365"
 };
 globalThis.game.modules.get = Map.prototype.get.bind(globalThis.game.modules);
 const analysis = await import("../module/analysis.mjs");
+const dnd5e = await import("./fixtures/systems/dnd5e/main.mjs");
 alpha.registerBusyHook(200000);
+dnd5e.register();
 for (let i = 0; i < 5; i++) Hooks.callAll("scoreHook");
 const rows = analysis.scorecard({});
 ok("scorecard produces rows", rows.length > 0, `n=${rows.length}`);
 ok("scorecard ranks by impact", rows.every((r, i) => i === 0 || rows[i - 1].score >= r.score));
 const alphaRow = rows.find((r) => r.id === "alpha-mod");
 ok("alpha appears with measured CPU", alphaRow && alphaRow.cpuMs > 0, `cpuMs=${alphaRow?.cpuMs}`);
+const sysRow = rows.find((r) => r.id === "system:dnd5e");
+ok("the active system appears as a package", !!sysRow, `ids=${rows.map((r) => r.id).join(" | ")}`);
+ok("the active system is not reported as uninstalled", sysRow?.installed === true, `installed=${sysRow?.installed}`);
+ok("the active system is reported as active", sysRow?.active === true, `active=${sysRow?.active}`);
+ok("the active system uses its real title", sysRow?.title === "D&D Fifth Edition", `title=${sysRow?.title}`);
+const coreRow = rows.find((r) => r.id === "core");
+ok("Foundry core is not reported as uninstalled", !coreRow || coreRow.installed === true,
+  `installed=${coreRow?.installed}`);
 const f = analysis.findings({ rows });
 ok("findings render without throwing", Array.isArray(f));
 ok("heapTrend handles short series", analysis.heapTrend(P.samples.toArray()).valid === false);
@@ -505,6 +518,29 @@ const deep = { l: null }; let cur = deep;
 for (let i = 0; i < 50; i++) { cur.l = { l: null }; cur = cur.l; }
 ok("estimateSize respects depth cap", census.estimateSize(deep, { maxDepth: 5 }).truncated === true);
 ok("jsonSize works", census.jsonSize({ a: "bb" }) === JSON.stringify({ a: "bb" }).length);
+
+section("Package resolution");
+// Flag namespaces and stack-derived owner ids are not all module ids: the active system, core
+// and the world all write flags too, and none of them live in `game.modules`.
+ok("an installed module resolves", census.resolvePackage("alpha-mod").installed === true);
+ok("an installed module keeps its title", census.resolvePackage("alpha-mod").title === "Alpha");
+ok("a genuinely absent module is still not installed",
+  census.resolvePackage("ghost-mod").installed === false);
+ok("the active system resolves by bare id (flag namespace)",
+  census.resolvePackage("dnd5e").installed === true);
+ok("the active system resolves by prefixed id (stack attribution)",
+  census.resolvePackage("system:dnd5e").installed === true);
+ok("the active system carries its title", census.resolvePackage("dnd5e").title === "D&D Fifth Edition");
+ok("the active system is marked active", census.resolvePackage("system:dnd5e").active === true);
+ok("some other world's system is still not installed",
+  census.resolvePackage("system:pf2e").installed === false);
+ok("core resolves", census.resolvePackage("core").installed === true);
+ok("core is titled", census.resolvePackage("core").title === "Foundry Core");
+ok("world flags resolve", census.resolvePackage("world").installed === true);
+ok("world scripts resolve", census.resolvePackage("world-script").installed === true);
+ok("unattributed is not claimed as installed",
+  census.resolvePackage("unattributed").installed === false);
+ok("unattributed is titled", census.resolvePackage("unattributed").title === "Unattributed");
 
 /* -- summary ---------------------------------------------------------------------------------- */
 console.log(`\n[1m${pass} passed, ${fail} failed[0m`);

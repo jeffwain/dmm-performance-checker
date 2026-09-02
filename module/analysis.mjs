@@ -7,7 +7,7 @@
  * disprove it. A profiler that just says "this module is slow" is a rumour generator.
  */
 
-import { bytes, ms } from "./census.mjs";
+import { bytes, ms, resolvePackage } from "./census.mjs";
 
 const P = () => globalThis.DMMPC;
 
@@ -34,7 +34,9 @@ export function scorecard({ resources = [], canvas = null, memory = null } = {})
 
   const rows = [];
   for (const o of p.owners.values()) {
-    const mod = globalThis.game?.modules?.get(o.id);
+    // Owner ids come from stack attribution, so they include `system:<id>`, `world-script`,
+    // `core` and `unattributed` as well as module ids. Resolve them all, not just modules.
+    const pkg = resolvePackage(o.id);
     // Charge each package its *exclusive* libWrapper cost. The inclusive figure is kept
     // separately: a pass-through wrapper on a hot core function envelopes enormous amounts of
     // time that belongs to core and to other packages, and billing it here would make the
@@ -51,9 +53,10 @@ export function scorecard({ resources = [], canvas = null, memory = null } = {})
 
     const row = {
       id: o.id,
-      title: mod?.title || (o.id === "core" ? "Foundry Core" : o.id === "unattributed" ? "Unattributed" : o.id),
-      installed: !!mod,
-      active: !!mod?.active,
+      title: pkg.title,
+      kind: pkg.kind,
+      installed: pkg.installed,
+      active: pkg.active,
       muted: p.muted.has(o.id),
 
       cpuMs,
