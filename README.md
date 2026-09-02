@@ -20,7 +20,8 @@ OK, that all said, from here on be AI dragons. - hightouch
 ## Install
 
 Copy the whole folder to `<FoundryUserData>/Data/modules/dmm-performance-checker/`, then enable
-it in Module Management.
+it in Module Management. I don't [yet] know how to add the module and ZIP information to work 
+correctly in releases, so it's a manual install for now.
 
 Open it from **Configure Settings → Module Settings → Open Performance Dashboard**, from the
 gauge button in the token scene controls, or with **Ctrl+Shift+P**.
