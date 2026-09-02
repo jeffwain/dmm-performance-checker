@@ -1,0 +1,42 @@
+{
+  "id": "dmm-performance-checker",
+  "type": "module",
+  "title": "DMM Performance Checker",
+  "description": "Per-module performance forensics for Foundry VTT. Attributes CPU time, frame cost, DOM churn, timers, listeners, network, database writes, memory growth and canvas load to the specific module responsible. Includes live module muting for zero-reload A/B testing and long-session drift tracking.",
+  "version": "1.0.0",
+  "authors": [
+    {
+      "name": "hightouch"
+    }
+  ],
+  "compatibility": {
+    "minimum": "13",
+    "verified": "14.367"
+  },
+  "library": true,
+  "scripts": [
+    "scripts/dmm-probe.js"
+  ],
+  "esmodules": [
+    "module/main.mjs"
+  ],
+  "styles": [
+    "styles/dmm-performance-checker.css"
+  ],
+  "languages": [
+    {
+      "lang": "en",
+      "name": "English",
+      "path": "lang/en.json"
+    }
+  ],
+  "socket": false,
+  "packs": [],
+  "relationships": {},
+  "flags": {
+    "hotReload": {
+      "extensions": ["css", "json"],
+      "paths": ["styles", "lang"]
+    }
+  }
+}

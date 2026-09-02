@@ -1,0 +1,11 @@
+{
+  "DMM.Dashboard.Title": "Performance Checker",
+  "DMM.Settings.Menu.Name": "DMM Performance Checker",
+  "DMM.Settings.Menu.Label": "Open Performance Dashboard",
+  "DMM.Settings.Menu.Hint": "Per-module CPU, frame, memory, DOM, canvas and world-data forensics, with live module muting.",
+  "DMM.Settings.SceneControl.Name": "Show scene control button",
+  "DMM.Settings.SceneControl.Hint": "Adds a gauge button to the token scene controls for one-click access.",
+  "DMM.Settings.AutoOpen.Name": "Open dashboard automatically at startup",
+  "DMM.Settings.AutoOpen.Hint": "Useful when you are actively hunting a problem across a whole session.",
+  "DMM.Keybinding.Open": "Open Performance Dashboard"
+}
