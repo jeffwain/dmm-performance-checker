@@ -1,4 +1,4 @@
-# DMM Performance Checker
+# The Dice Monster's Miscellany – Performance Checker
 
 Per-module performance forensics tool for Foundry VTT v13/v14. Yes, this is built \[entirely\] by
 AI, though I have tested it and verified that it works. Is it going to be 100% perfect? No. Will it
