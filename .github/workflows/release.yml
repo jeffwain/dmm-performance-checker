@@ -37,3 +37,20 @@ jobs:
 
       - name: Attach to the release
         run: gh release upload "$TAG" dist/module.json dist/module.zip --clobber
+
+      # This version's manifest, for installing or pinning it directly. npm run
+      # release leaves a <!-- manifest --> marker below your own notes; without
+      # one (a release made on GitHub) the link goes at the top. Skipped if the
+      # notes already have it, so re-running the job doesn't repeat it.
+      - name: Add the manifest link to the release notes
+        run: |
+          url="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/module.json"
+          link="**Manifest:** $url"
+          marker="<!-- manifest -->"
+          body=$(gh release view "$TAG" --json body --jq .body)
+          case "$body" in *"$url"*) exit 0 ;; esac
+          case "$body" in
+            *"$marker"*) printf '%s\n' "${body/"$marker"/$link}" ;;
+            *) printf '%s\n\n%s\n' "$link" "$body" ;;
+          esac > "$RUNNER_TEMP/notes.md"
+          gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
