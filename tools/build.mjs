@@ -20,6 +20,7 @@ const RUNTIME_PATHS = [
   "README.md", "LICENSE", "assets", "icons", "lang", "languages",
   "module", "packs", "scripts", "sounds", "styles", "templates",
 ];
+const isTest = (path) => /\.test\.m?js$/.test(path);
 
 /** "v1.2.3" or "1.2.3" -> "1.2.3". Throws on anything that isn't a version. */
 export function versionFromTag(tag) {
@@ -101,7 +102,7 @@ function build(tagArg) {
   mkdirSync(pkg, { recursive: true });
   for (const entry of packageEntries(manifest, overrides.files)) {
     if (existsSync(join(root, entry))) {
-      cpSync(join(root, entry), join(pkg, entry), { recursive: true });
+      cpSync(join(root, entry), join(pkg, entry), { recursive: true, filter: (src) => !isTest(src) });
     }
   }
 
