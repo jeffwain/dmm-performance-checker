@@ -27,8 +27,9 @@ jobs:
         with:
           node-version: lts/*
 
-      # No dependencies, so no npm ci.
-      - run: npm run verify
+      - run: if [ -f package-lock.json ]; then npm ci; fi
+
+      - run: npm run verify --if-present
 
       - run: npm run build -- "$TAG"
 
@@ -48,9 +49,9 @@ jobs:
           link="**Manifest:** $url"
           marker="<!-- manifest -->"
           body=$(gh release view "$TAG" --json body --jq .body)
-          case "$body" in *"$url"*) exit 0 ;; esac
           case "$body" in
-            *"$marker"*) printf '%s\n' "${body/"$marker"/$link}" ;;
-            *) printf '%s\n\n%s\n' "$link" "$body" ;;
-          esac > "$RUNNER_TEMP/notes.md"
-          gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
+            *"$url"*) exit 0 ;;
+            *"$marker"*) notes="${body/"$marker"/$link}" ;;
+            *) notes=$(printf '%s\n\n%s' "$link" "$body") ;;
+          esac
+          gh release edit "$TAG" --notes "$notes"
