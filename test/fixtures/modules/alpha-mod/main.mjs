@@ -35,6 +35,10 @@ export function throwingHook() {
   Hooks.on("boomHook", () => { throw new Error("alpha exploded"); });
 }
 
+export function rejectingAsyncHook() {
+  Hooks.on("asyncBoomHook", async () => { throw new Error("alpha async exploded"); });
+}
+
 export function tickerWork(ticker) {
   ticker.add(function alphaTick() {
     let x = 0;
@@ -45,6 +49,22 @@ export function tickerWork(ticker) {
 
 export async function dbWork() {
   await foundry.abstract.Document.updateDocuments([{ _id: "a" }, { _id: "b" }]);
+}
+
+export async function embeddedDbWork() {
+  const doc = new foundry.abstract.Document();
+  await doc.updateEmbeddedDocuments("Item", [{ _id: "e1" }, { _id: "e2" }]);
+}
+
+export async function modifyBatchWork() {
+  await foundry.documents.modifyBatch([
+    { action: "update", updates: [{ _id: "b1" }, { _id: "b2" }, { _id: "b3" }] },
+    { action: "create", data: [{ name: "New" }] }
+  ]);
+}
+
+export function logDeprecation(message, options = {}) {
+  foundry.utils.logCompatibilityWarning(message, options);
 }
 
 /* The registrations below must live inside this file: attribution is by stack, so a hook

@@ -1,0 +1,39 @@
+# Publishing a GitHub release (tag it like v1.2.3) builds the module and
+# attaches module.json and module.zip to that release. Foundry installs and
+# updates from the manifest URL; nothing is sent to foundryvtt.com.
+#
+# Publish from the GitHub UI, or from a terminal with npm run release.
+
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      # Passed through env, not ${{ }} in scripts, so a tag name can't inject shell.
+      TAG: ${{ github.event.release.tag_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+
+      # No dependencies, so no npm ci.
+      - run: npm run verify
+
+      - run: npm run build -- "$TAG"
+
+      - name: Zip the package
+        run: cd dist/package && zip -r ../module.zip .
+
+      - name: Attach to the release
+        run: gh release upload "$TAG" dist/module.json dist/module.zip --clobber

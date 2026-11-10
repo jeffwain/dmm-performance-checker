@@ -20,10 +20,10 @@ const root = join(here, "..");
 let pass = 0, fail = 0;
 const failures = [];
 function ok(name, cond, extra = "") {
-  if (cond) { pass++; console.log(`  [32m✓[0m ${name}`); }
-  else { fail++; failures.push(`${name} ${extra}`); console.log(`  [31m✗[0m ${name} ${extra}`); }
+  if (cond) { pass++; console.log(`  \x1b[32m✓\x1b[0m ${name}`); }
+  else { fail++; failures.push(`${name} ${extra}`); console.log(`  \x1b[31m✗\x1b[0m ${name} ${extra}`); }
 }
-function section(t) { console.log(`\n[1m${t}[0m`); }
+function section(t) { console.log(`\n\x1b[1m${t}\x1b[0m`); }
 
 /* -- boot probe --------------------------------------------------------------------------- */
 installHarness();
@@ -49,7 +49,7 @@ globalThis.foundry.applications = {
   detached: { windows: new Map() },
   ux: { FormDataExtended: class { constructor() { this.object = {}; } } }
 };
-globalThis.foundry.utils = { saveDataToFile: () => {} };
+Object.assign((globalThis.foundry.utils ||= {}), { saveDataToFile: () => {} });
 
 /* -- stub game -------------------------------------------------------------------------- */
 function collection(entries) {
@@ -62,7 +62,7 @@ function collection(entries) {
 }
 globalThis.game = {
   ready: true,
-  version: "14.367",
+  version: "14.370",
   world: { id: "test-world" },
   system: { id: "dnd5e", version: "5.0.0" },
   messages: { size: 1200 },
@@ -621,6 +621,130 @@ section("v14: observer cost is attributed and rendered");
   obs.disconnect();
 }
 
+section("v14.370: canvas managedTextures, KTX2 compressed textures, TextureLoader VRAM, and CanvasAnimation");
+{
+  const ktxTex = {
+    realWidth: 2048, realHeight: 2048, resolution: 1,
+    resource: { src: "maps/dungeon.ktx2", _levelBuffers: [new Uint8Array(65536), new Uint8Array(16384)] }
+  };
+  const rgbaTex = {
+    realWidth: 1000, realHeight: 1000, resolution: 1,
+    resource: { src: "tokens/hero.webp" }
+  };
+  globalThis.PIXI.utils.BaseTextureCache = { "tokens/hero.webp": rgbaTex };
+  globalThis.foundry.canvas = {
+    TextureLoader: { approximateTotalMemoryUsage: 128 * 1024 * 1024 },
+    animation: { CanvasAnimation: { animations: { a1: {}, a2: {} } } }
+  };
+  globalThis.canvas = {
+    ready: true,
+    stage: new globalThis.PIXI.Container(),
+    app: {
+      renderer: {
+        type: 1, width: 1920, height: 1080, resolution: 1,
+        gl: { isContextLost: () => false },
+        texture: { managedTextures: [rgbaTex, ktxTex] }
+      },
+      ticker: { _head: { next: null } }
+    },
+    layers: []
+  };
+  const c = census.canvasCensus();
+  ok("union of BaseTextureCache and managedTextures deduplicates shared textures",
+    c.textures.count === 2, `count=${c.textures.count}`);
+  ok("KTX2 compressed texture uses _levelBuffers byteLength instead of w*h*4",
+    c.textures.bytes === (1000 * 1000 * 4) + 65536 + 16384,
+    `bytes=${c.textures.bytes}`);
+  ok("TextureLoader.approximateTotalMemoryUsage is captured",
+    c.textures.loaderBytes === 128 * 1024 * 1024, `loaderBytes=${c.textures.loaderBytes}`);
+  ok("CanvasAnimation active count is captured", c.animations === 2, `animations=${c.animations}`);
+  delete globalThis.canvas;
+  globalThis.PIXI.utils.BaseTextureCache = {};
+}
+
+section("v14.370: recursive traverseEmbeddedDocuments, invalidDocumentIds, game.effects, and audio buffers");
+{
+  const prevGame = globalThis.game;
+  const nestedEffect = { flags: { "alpha-mod": { a: "x".repeat(500) } } };
+  const actorWithTraverse = {
+    name: "Hero",
+    toObject: () => ({ name: "Hero", flags: {} }),
+    flags: {},
+    *traverseEmbeddedDocuments() {
+      yield nestedEffect;
+    }
+  };
+  const actorsColl = [actorWithTraverse];
+  actorsColl.invalidDocumentIds = new Set(["bad1", "bad2"]);
+
+  globalThis.game = {
+    ...prevGame,
+    actors: actorsColl, items: [], journal: [], tables: [], macros: [], playlists: [],
+    scenes: [], users: [], combats: [], cards: [], folders: [], messages: [],
+    packs: [],
+    effects: { size: 620 },
+    issues: {
+      validationFailures: { Actor: { bad1: {}, bad2: {} } },
+      usabilityIssues: { WEBGL_LOSS: { message: "WebGL degraded", severity: "error" } }
+    },
+    workers: new Map([["TextureCompressor", {}]]),
+    audio: {
+      buffers: {
+        size: 45, usage: { current: 900 * 1024 * 1024, max: 1024 * 1024 * 1024, pct: 0.88 }
+      }
+    }
+  };
+  const dc = await census.dataCensus();
+  ok("traverseEmbeddedDocuments reaches deeply nested flags",
+    dc.flags.some((f) => f.namespace === "alpha-mod" && f.bytes > 500),
+    JSON.stringify(dc.flags));
+  ok("v14 health captures trackedEffects, invalidDocuments, and usabilityIssues",
+    dc.v14?.trackedEffects === 620 && dc.v14?.invalidDocuments === 2 && dc.v14?.usabilityIssues?.length === 1,
+    JSON.stringify(dc.v14));
+
+  const mc = census.memoryCensus();
+  ok("memoryCensus captures Foundry v14 audio buffer cache",
+    mc.audio?.bytes === 900 * 1024 * 1024 && mc.audio?.cached === 45,
+    JSON.stringify(mc.audio));
+  ok("memoryCensus captures active Foundry workers",
+    Array.isArray(mc.workers) && mc.workers.length === 1 && mc.workers[0].name === "TextureCompressor",
+    JSON.stringify(mc.workers));
+
+  for (let i = 0; i < 250; i++) {
+    alpha.logDeprecation("Old v12 global is deprecated", { since: 12, until: 14, once: true });
+  }
+  const v14Rows = analysis.scorecard({ memory: mc });
+  const v14Findings = analysis.findings({ rows: v14Rows, data: dc, memory: mc });
+  const v14Titles = v14Findings.map((x) => x.title);
+  ok("flags deprecation warning storm",
+    v14Titles.some((t) => /Deprecation warning storm/i.test(t)), v14Titles.join(" | "));
+  ok("flags large decoded audio buffer cache",
+    v14Titles.some((t) => /audio buffer cache/i.test(t)), v14Titles.join(" | "));
+  ok("flags large ActiveEffect expiry registry",
+    v14Titles.some((t) => /ActiveEffect expiry registry/i.test(t)), v14Titles.join(" | "));
+  ok("flags invalid documents failing schema validation",
+    v14Titles.some((t) => /failing schema validation/i.test(t)), v14Titles.join(" | "));
+  ok("flags client usability issues",
+    v14Titles.some((t) => /usability issue/i.test(t)), v14Titles.join(" | "));
+
+  app.cache.data = dc;
+  app.cache.memory = mc;
+  app.tab = "errors";
+  await app._prepareContext();
+  const errHtml = await app._renderHTML();
+  ok("Errors tab renders Compatibility & deprecation warnings table",
+    errHtml.includes("Deprecation warnings") && errHtml.includes("Old v12 global is deprecated"));
+
+  app.tab = "memory";
+  await app._prepareContext();
+  app.cache.memory = mc;
+  const memHtml2 = await app._renderHTML();
+  ok("Memory tab renders Native caches & workers card",
+    memHtml2.includes("Native browser memory &amp; workers") && memHtml2.includes("TextureCompressor"));
+
+  globalThis.game = prevGame;
+}
+
 section("Snapshot diff");
 const d = analysis.diffSnapshots(app.snapshots[0], app.snapshots[1]);
 ok("diff reports heap growth per hour", d.heapPerHour > 0, String(d.heapPerHour));
@@ -637,9 +761,10 @@ try { parsed = JSON.parse(exported); } catch (e) { /* handled */ }
 ok("export is valid JSON", !!parsed);
 ok("export contains scorecard and findings", !!parsed?.scorecard && !!parsed?.findings);
 ok("export contains raw samples", Array.isArray(parsed?.samples));
+ok("export contains compat warnings", Array.isArray(parsed?.compat) && parsed.compat.length > 0);
 ok("export has no Map leftovers", !/"\[object Map\]"/.test(exported || ""));
 
 clearInterval(iv);
-console.log(`\n[1m${pass} passed, ${fail} failed[0m`);
+console.log(`\n\x1b[1m${pass} passed, ${fail} failed\x1b[0m`);
 if (fail) { console.log("Failures:\n" + failures.map((x) => `  - ${x}`).join("\n")); process.exit(1); }
 process.exit(0);

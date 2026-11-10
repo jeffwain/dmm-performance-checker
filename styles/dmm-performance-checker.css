@@ -21,7 +21,7 @@
   font-size: 13px;
 }
 
-/* ---------- toolbar ---------- */
+/* ── toolbar ─────────────────────────────────────────────────────────────── */
 .dmm-pc .dmm-toolbar {
   display: flex;
   align-items: center;
@@ -50,7 +50,7 @@
 .dmm-pc .dmm-actions button:hover { border-color: var(--dmm-accent); }
 .dmm-pc .dmm-actions button.on { border-color: var(--dmm-accent); color: var(--dmm-accent); }
 
-/* ---------- tabs ---------- */
+/* ── tabs ────────────────────────────────────────────────────────────────── */
 .dmm-pc .dmm-tabs {
   display: flex; gap: 2px; padding: 0 8px; flex: 0 0 auto;
   border-bottom: 1px solid var(--dmm-line); overflow-x: auto; scrollbar-width: thin;
@@ -66,7 +66,7 @@
 .dmm-pc .dmm-tab:focus-visible { outline: 1px solid var(--dmm-accent); outline-offset: -2px; }
 .dmm-pc .dmm-tab i { margin-right: 5px; opacity: .8; }
 
-/* ---------- body ---------- */
+/* ── body ────────────────────────────────────────────────────────────────── */
 .dmm-pc .dmm-body { flex: 1 1 auto; overflow-y: auto; padding: 10px 12px; scrollbar-width: thin; }
 
 .dmm-pc .dmm-card {
@@ -94,7 +94,7 @@
 .dmm-pc .dmm-legend { font-size: 11px; color: var(--dmm-text-dim); margin-top: 4px; font-variant-numeric: tabular-nums; }
 .dmm-pc .dmm-empty { font-size: 12px; color: var(--dmm-text-dim); font-style: italic; padding: 6px 0; }
 
-/* ---------- tables ---------- */
+/* ── tables ──────────────────────────────────────────────────────────────── */
 .dmm-pc .dmm-table { width: 100%; border-collapse: collapse; font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .dmm-pc .dmm-table th {
   text-align: left; font-weight: 600; font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em;
@@ -118,7 +118,7 @@
 .dmm-pc .dmm-warn { color: var(--dmm-warn); }
 .dmm-pc .dmm-info { color: var(--dmm-accent); }
 
-/* ---------- bars, sparks, histogram ---------- */
+/* ── bars, sparks, histogram ─────────────────────────────────────────────── */
 .dmm-pc .dmm-bar {
   position: relative; height: 15px; min-width: 60px; background: rgba(128,128,128,.15);
   border-radius: 3px; overflow: hidden;
@@ -137,7 +137,7 @@
 .dmm-pc .dmm-hist-bar.bad  { background: var(--dmm-bad); }
 .dmm-pc .dmm-hist-col label { font-size: 9px; text-align: center; color: var(--dmm-text-dim); margin-top: 3px; }
 
-/* ---------- ranking rows ---------- */
+/* ── ranking rows ────────────────────────────────────────────────────────── */
 .dmm-pc .dmm-rank {
   display: grid; grid-template-columns: minmax(160px, 1.4fr) 2fr minmax(180px, 1.2fr) auto;
   gap: 10px; align-items: center; padding: 4px 0; border-bottom: 1px solid rgba(128,128,128,.12);
@@ -146,7 +146,7 @@
 .dmm-pc .dmm-rank-meta { font-size: 10.5px; color: var(--dmm-text-dim); font-variant-numeric: tabular-nums; }
 .dmm-pc .dmm-muted-tag { color: var(--dmm-bad); font-size: 10px; font-style: normal; }
 
-/* ---------- findings ---------- */
+/* ── findings ────────────────────────────────────────────────────────────── */
 .dmm-pc .dmm-finding {
   border-left: 3px solid var(--dmm-accent); padding: 6px 10px; margin-bottom: 5px;
   background: rgba(128,128,128,.07); border-radius: 0 4px 4px 0;
@@ -165,7 +165,7 @@
 .dmm-pc .dmm-stack { font-size: 10px; white-space: pre-wrap; max-height: 160px; overflow: auto; margin-top: 6px; }
 .dmm-pc .dmm-stack.tall { max-height: 340px; }
 
-/* ---------- frozen detail modal ---------- */
+/* ── frozen detail modal ─────────────────────────────────────────────────── */
 .dmm-pc.dmm-detail .dmm-body { padding: 10px 12px; }
 .dmm-pc .dmm-frozen-banner {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
@@ -200,13 +200,13 @@
 }
 .dmm-pc .dmm-independent summary i { color: var(--dmm-accent); margin-right: 5px; }
 
-/* ---------- kv grid ---------- */
+/* ── kv grid ─────────────────────────────────────────────────────────────── */
 .dmm-pc .dmm-kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 6px 12px; }
 .dmm-pc .dmm-kv > div { display: flex; flex-direction: column; }
 .dmm-pc .dmm-kv label { font-size: 9.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--dmm-text-dim); }
 .dmm-pc .dmm-kv b { font-size: 13px; font-variant-numeric: tabular-nums; }
 
-/* ---------- buttons ---------- */
+/* ── buttons ─────────────────────────────────────────────────────────────── */
 .dmm-pc button.dmm-mini {
   font-size: 10.5px; padding: 2px 8px; width: auto; height: auto; line-height: 1.5;
   border: 1px solid var(--dmm-line); background: var(--dmm-bg); border-radius: 3px; cursor: pointer;
@@ -218,7 +218,7 @@
 }
 .dmm-pc button.dmm-primary:hover { background: rgba(124,92,255,.3); }
 
-/* ---------- footer ---------- */
+/* ── footer ──────────────────────────────────────────────────────────────── */
 .dmm-pc .dmm-footer {
   flex: 0 0 auto; display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
   padding: 5px 12px; border-top: 1px solid var(--dmm-line); font-size: 10.5px; color: var(--dmm-text-dim);
@@ -227,15 +227,15 @@
 .dmm-pc .dmm-selfcost { margin-left: auto; font-variant-numeric: tabular-nums; }
 .dmm-pc .dmm-busy { color: var(--dmm-accent); font-weight: 600; }
 
-/* ---------- fatal ---------- */
+/* ── fatal ───────────────────────────────────────────────────────────────── */
 .dmm-pc .dmm-fatal { padding: 24px; }
 .dmm-pc .dmm-fatal pre { font-size: 10px; white-space: pre-wrap; }
 
-/* ---------- config dialog ---------- */
+/* ── config dialog ───────────────────────────────────────────────────────── */
 .dmm-config { display: flex; flex-direction: column; gap: 7px; font-size: 12px; }
 .dmm-config label { display: flex; align-items: center; gap: 8px; }
 .dmm-config select, .dmm-config input[type="number"] { margin-left: auto; max-width: 260px; }
 .dmm-config .notes { font-size: 11px; opacity: .75; margin: 0 0 4px; line-height: 1.45; }
 
-/* ---------- idle results ---------- */
+/* ── idle results ────────────────────────────────────────────────────────── */
 .dmm-pc .dmm-idle { margin-top: 10px; border-top: 1px dashed var(--dmm-line); padding-top: 8px; }

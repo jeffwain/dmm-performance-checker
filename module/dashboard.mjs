@@ -280,6 +280,7 @@ export class FindingDetail extends ApplicationV2 {
 
   _renderVitals(v) {
     if (!v) return "";
+    const dropCutoff = Math.round((v.frameBudgetMs || P()?.frameBudgetMs || 16.67) * 2);
     return `<div class="dmm-card">
       <h3><i class="fa-solid fa-heart-pulse"></i> Client vitals at capture</h3>
       <div class="dmm-kv">
@@ -290,7 +291,7 @@ export class FindingDetail extends ApplicationV2 {
         <div><label>Live intervals</label><b>${num(v.intervals)}</b></div>
         <div><label>Open apps</label><b>${num(v.apps)}</b></div>
         <div><label>Chat in DOM</label><b>${num(v.chatDom)}</b></div>
-        <div><label>Frames &gt; 33 ms</label><b>${num(v.droppedFrames)}</b></div>
+        <div><label>Frames &gt; ${dropCutoff} ms</label><b>${num(v.droppedFrames)}</b></div>
       </div>
     </div>`;
   }
@@ -882,6 +883,7 @@ export class PerformanceDashboard extends ApplicationV2 {
     const fpsVals = s.map((x) => x.fps).filter((v) => v > 0);
     const heapVals = s.map((x) => x.heap).filter((v) => v > 0);
     const trend = heapTrend(s);
+    const dropCutoff = Math.round((p.frameBudgetMs || 16.67) * 2);
 
     return `
     <div class="dmm-grid-2">
@@ -889,7 +891,7 @@ export class PerformanceDashboard extends ApplicationV2 {
         <h3><i class="fa-solid fa-chart-line"></i> Frame rate <small>${fpsVals.length} samples</small></h3>
         ${spark(fpsVals, { min: 0, max: Math.max(60, ...fpsVals), color: "var(--dmm-good)" })}
         <div class="dmm-legend">${fpsVals.length ? `min ${Math.min(...fpsVals).toFixed(0)} · avg ${(fpsVals.reduce((a, b) => a + b, 0) / fpsVals.length).toFixed(0)} · now ${fpsVals[fpsVals.length - 1].toFixed(0)}` : ""}
-          · ${num(p.global.droppedFrames)} frames over 33 ms</div>
+          · ${num(p.global.droppedFrames)} frames over ${dropCutoff} ms</div>
       </div>
       <div class="dmm-card">
         <h3><i class="fa-solid fa-memory"></i> Heap <small>${trend.valid ? `${bytes(trend.bytesPerHour)}/hr trend` : "gathering data"}</small></h3>
@@ -1241,6 +1243,22 @@ export class PerformanceDashboard extends ApplicationV2 {
     </div>
 
     ${m ? `
+    ${m.audio || m.workers?.length ? `<div class="dmm-card">
+      <h3><i class="fa-solid fa-volume-high"></i> Native browser memory &amp; workers <small>outside V8 JS heap</small></h3>
+      <div class="dmm-kv">
+        ${m.audio ? `
+          <div><label>Audio buffer cache</label><b>${bytes(m.audio.bytes)}</b><small>${m.audio.pct.toFixed(1)}% of ${bytes(m.audio.max)}</small></div>
+          <div><label>Cached buffers</label><b>${num(m.audio.cached)}</b><small>${num(m.audio.playing)} playing</small></div>
+        ` : ""}
+        ${m.workers?.length ? `
+          <div><label>Web workers</label><b>${num(m.workers.length)}</b><small>${esc(m.workers.map((w) => w.name).join(", "))}</small></div>
+        ` : ""}
+      </div>
+      <p class="dmm-help">Decoded WebAudio PCM buffers and Web Workers live in native browser memory outside
+      <code>performance.memory</code>, so they can add hundreds of megabytes to the tab's RAM footprint while the JS
+      heap chart stays flat.</p>
+    </div>` : ""}
+
     <div class="dmm-card">
       <h3><i class="fa-solid fa-box-archive"></i> Retained by module API <small>bounded object-graph estimate</small></h3>
       ${table("retained", [
@@ -1361,14 +1379,6 @@ export class PerformanceDashboard extends ApplicationV2 {
   }
 
   /**
-   * The controlled experiment for "are listeners actually leaking?".
-   *
-   * Counting listeners at one moment tells you nothing, because you cannot know what should
-   * have been cleaned up. Marking a baseline and performing a known reversible action — open a
-   * sheet, close it — turns it into a falsifiable test: whatever is still attached afterwards
-   * genuinely survived, and the per-target breakdown says what it survived on.
-   */
-  /**
    * MutationObserver / ResizeObserver / IntersectionObserver, plus requestIdleCallback.
    *
    * These are scheduled by the browser rather than by the module, so nothing on the context
@@ -1487,9 +1497,9 @@ export class PerformanceDashboard extends ApplicationV2 {
     return `
     <div class="dmm-grid-3">
       <div class="dmm-card mini"><label>Display objects</label><b>${num(c.totalObjects)}</b><small>max depth ${c.maxDepth}${c.truncated ? " · walk truncated" : ""}</small></div>
-      <div class="dmm-card mini"><label>Texture memory</label><b>${bytes(c.textures.bytes)}</b><small>${num(c.textures.count)} base textures</small></div>
+      <div class="dmm-card mini"><label>Texture memory</label><b>${bytes(c.textures.bytes)}</b><small>${num(c.textures.count)} base textures${c.textures.loaderBytes ? ` · loader ${bytes(c.textures.loaderBytes)}` : ""}</small></div>
       <div class="dmm-card mini"><label>Filters</label><b>${num(c.filterCount)}</b><small>on ${num(c.filteredObjects)} objects</small></div>
-      <div class="dmm-card mini"><label>Ticker listeners</label><b>${num(c.tickerListeners)}</b><small>run every frame</small></div>
+      <div class="dmm-card mini"><label>Ticker listeners</label><b>${num(c.tickerListeners)}</b><small>run every frame${c.animations ? ` · ${num(c.animations)} active anims` : ""}</small></div>
       <div class="dmm-card mini"><label>Renderer</label><b>${esc(c.renderer?.type || "?")}</b><small>PIXI ${esc(c.pixi)}${c.renderer?.contextLost ? " · CONTEXT LOST" : ""}</small></div>
       <div class="dmm-card mini"><label>Resolution</label><b>${c.renderer ? `${c.renderer.width}×${c.renderer.height}` : "—"}</b><small>@${c.renderer?.resolution ?? "?"}x</small></div>
     </div>
@@ -1580,8 +1590,8 @@ export class PerformanceDashboard extends ApplicationV2 {
     }
     return `
     <div class="dmm-grid-3">
-      <div class="dmm-card mini"><label>Documents scanned</label><b>${num(d.totals.docs)}</b><small>+${num(d.totals.embedded)} embedded</small></div>
-      <div class="dmm-card mini"><label>Total source data</label><b>${bytes(d.totals.docBytes)}</b></div>
+      <div class="dmm-card mini"><label>Documents scanned</label><b>${num(d.totals.docs)}</b><small>+${num(d.totals.embedded)} embedded${d.v14?.invalidDocuments ? ` · ${num(d.v14.invalidDocuments)} invalid` : ""}</small></div>
+      <div class="dmm-card mini"><label>Total source data</label><b>${bytes(d.totals.docBytes)}</b>${d.v14?.trackedEffects ? `<small>${num(d.v14.trackedEffects)} expiry effects</small>` : ""}</div>
       <div class="dmm-card mini"><label>Module flag data</label><b>${bytes(d.totals.flagBytes)}</b><small>${pct((d.totals.flagBytes / Math.max(1, d.totals.docBytes)) * 100)} of world</small></div>
     </div>
 
@@ -1766,6 +1776,7 @@ export class PerformanceDashboard extends ApplicationV2 {
         return { owner, where, message, count };
       })
       .sort((a, b) => b.count - a.count);
+    const compatRows = [...(p.compat?.values?.() || [])].sort((a, b) => b.count - a.count).slice(0, 40);
     const recent = p.errors.toArray().slice(-40).reverse();
     // Kept so the click handler can freeze exactly the row that was rendered, even if the
     // ring buffer has moved on by the time you click.
@@ -1785,6 +1796,20 @@ export class PerformanceDashboard extends ApplicationV2 {
         { key: "message", label: "Message" }
       ], sigs, { empty: "No errors recorded." })}
     </div>
+
+    ${compatRows.length ? `<div class="dmm-card">
+      <h3><i class="fa-solid fa-triangle-exclamation"></i> Deprecation warnings <small>foundry.utils.logCompatibilityWarning</small></h3>
+      <p class="dmm-help">In Foundry v14, <code>logCompatibilityWarning</code> constructs a <code>new Error()</code> to
+      capture a stack trace on <em>every single call</em> before checking its deduplication Set — even when
+      <code>once: true</code> suppresses the console output after the first warning. A high count here is a hidden
+      CPU and GC tax.</p>
+      ${table("compat", [
+        { key: "owner", label: "Package", render: (r) => `<code>${esc(r.owner)}</code>` },
+        { key: "count", label: "Calls", align: "right", render: (r) => `<b class="${r.count >= 1000 ? "dmm-crit" : r.count >= 100 ? "dmm-warn" : ""}">${num(r.count)}</b>` },
+        { key: "since", label: "Since", render: (r) => (r.since ? `v${esc(r.since)}` : "—") },
+        { key: "message", label: "Warning" }
+      ], compatRows)}
+    </div>` : ""}
 
     <div class="dmm-card">
       <h3><i class="fa-solid fa-clock-rotate-left"></i> Recent errors with stacks</h3>
@@ -2015,7 +2040,8 @@ export class PerformanceDashboard extends ApplicationV2 {
       fps: last.fps || 0, heap: last.heap || 0, domNodes: last.domNodes || 0,
       listeners: last.listeners || 0, intervals: p.liveIntervals.size,
       apps: last.apps || 0, chatDom: last.chatDom || 0,
-      droppedFrames: p.global.droppedFrames
+      droppedFrames: p.global.droppedFrames,
+      frameBudgetMs: p.frameBudgetMs || 16.67
     };
   }
 
@@ -2254,6 +2280,7 @@ export class PerformanceDashboard extends ApplicationV2 {
       listeners: [...p.listeners.values()].map((l) => ({ ...l, targets: [...l.targets.entries()] })),
       net: [...p.net.values()].map((n) => ({ ...n, byPath: [...n.byPath.entries()] })),
       db: [...p.db.values()].map((d) => ({ ...d, byType: [...d.byType.entries()] })),
+      compat: [...(p.compat?.values?.() || [])],
       libWrapper: [...p.libWrapper.entries()],
       refreshHz: p.refreshHz,
       capabilities: p.capabilities,
@@ -2299,6 +2326,7 @@ export class PerformanceDashboard extends ApplicationV2 {
         that inspects <code>Hooks.events</code> by function identity. You lose per-module attribution.</p>
         <label><input type="checkbox" name="domProbe" ${c.domProbe ? "checked" : ""}> DOM mutation + storage probe</label>
         <label><input type="checkbox" name="listenerProbe" ${c.listenerProbe ? "checked" : ""}> Event listener probe</label>
+        <label><input type="checkbox" name="observerProbe" ${c.observerProbe ? "checked" : ""}> Observer + idle callback probe (Mutation/Resize/IntersectionObserver)</label>
         <label><input type="checkbox" name="tickerProbe" ${c.tickerProbe ? "checked" : ""}> PIXI ticker probe (per-frame cost)</label>
         <label><input type="checkbox" name="netProbe" ${c.netProbe ? "checked" : ""}> Network probe</label>
         <label><input type="checkbox" name="dbProbe" ${c.dbProbe ? "checked" : ""}> Database write probe</label>
@@ -2324,6 +2352,7 @@ export class PerformanceDashboard extends ApplicationV2 {
       mode: result.mode,
       domProbe: !!result.domProbe,
       listenerProbe: !!result.listenerProbe,
+      observerProbe: !!result.observerProbe,
       tickerProbe: !!result.tickerProbe,
       netProbe: !!result.netProbe,
       dbProbe: !!result.dbProbe,

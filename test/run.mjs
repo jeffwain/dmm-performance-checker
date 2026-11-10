@@ -18,10 +18,10 @@ const root = join(here, "..");
 let pass = 0, fail = 0;
 const failures = [];
 function ok(name, cond, extra = "") {
-  if (cond) { pass++; console.log(`  [32m✓[0m ${name}`); }
-  else { fail++; failures.push(name); console.log(`  [31m✗[0m ${name} ${extra}`); }
+  if (cond) { pass++; console.log(`  \x1b[32m✓\x1b[0m ${name}`); }
+  else { fail++; failures.push(name); console.log(`  \x1b[31m✗\x1b[0m ${name} ${extra}`); }
 }
-function section(t) { console.log(`\n[1m${t}[0m`); }
+function section(t) { console.log(`\n\x1b[1m${t}\x1b[0m`); }
 
 /* -- boot ---------------------------------------------------------------------------------- */
 const harness = installHarness();
@@ -351,7 +351,7 @@ section("Timeline");
 // cost: a warm JIT can bring the default `testHook` body under the 1.5 ms span threshold, which
 // made this assertion flake.
 for (let i = 0; i < 5 && !P.spans.toArray().some((x) => x.owner === "alpha-mod"); i++) {
-  Hooks.callAll("testHook", 400000);
+  Hooks.callAll("testHook", 1500000);
 }
 ok("slow callbacks recorded as spans", P.spans.toArray().some((x) => x.owner === "alpha-mod"),
   `spans=${P.spans.toArray().length}`);
@@ -460,10 +460,50 @@ P.sweepListeners();
 ok("closing the pop-out releases its listeners", winRec.attached === 0, `attached=${winRec.attached}`);
 globalThis.foundry.applications.detached.windows.delete("popout-1");
 
+section("Embedded document writes are not double-counted & modifyBatch is tracked (v14.370)");
+P.db.clear();
+await alpha.embeddedDbWork();
+const embDb = P.db.get("alpha-mod");
+ok("embedded update delegating to Document.updateDocuments is counted once",
+  embDb?.updates === 1 && embDb?.docs === 2,
+  `updates=${embDb?.updates} docs=${embDb?.docs}`);
+await alpha.modifyBatchWork();
+ok("modifyBatch / modifyDocumentBatch records batch creates and updates without double-counting",
+  embDb?.updates === 2 && embDb?.creates === 1 && embDb?.docs === 6,
+  `updates=${embDb?.updates} creates=${embDb?.creates} docs=${embDb?.docs}`);
+
+section("Compatibility warning storms (v14.370)");
+for (let i = 0; i < 5; i++) {
+  alpha.logDeprecation("Legacy API is deprecated", { since: 13, until: 15, once: true });
+}
+const compatRec = [...P.compat.values()].find((r) => r.owner === "alpha-mod");
+ok("compatibility warning attributed to module", !!compatRec, `keys=${[...P.compat.keys()].join(" | ")}`);
+ok("counts every invocation even when once:true suppresses console output",
+  compatRec?.count === 5 && P.owners.get("alpha-mod").compatWarnings === 5,
+  `count=${compatRec?.count} owner=${P.owners.get("alpha-mod").compatWarnings}`);
+ok("records since/until metadata", compatRec?.since === 13 && compatRec?.until === 15);
+
+section("Async hook rejections are attributed (v14.370)");
+const errBefore = P.owners.get("alpha-mod").errors;
+alpha.rejectingAsyncHook();
+// Suppress unhandledRejection in Node when the hook callback's returned promise rejects.
+const suppressUnhandled = () => {};
+process.on("unhandledRejection", suppressUnhandled);
+Hooks.callAll("asyncBoomHook");
+await new Promise((r) => setTimeout(r, 20));
+process.off("unhandledRejection", suppressUnhandled);
+ok("async hook rejection attributed to module",
+  P.owners.get("alpha-mod").errors === errBefore + 1,
+  `before=${errBefore} after=${P.owners.get("alpha-mod").errors}`);
+ok("async hook rejection recorded on hook record",
+  P.hooks.get("asyncBoomHook alpha-mod")?.errors === 1,
+  `hookErrors=${P.hooks.get("asyncBoomHook alpha-mod")?.errors}`);
+
 section("Counter reset");
 P.resetCounters();
 ok("hooks cleared", P.hooks.size === 0);
-ok("owner counters zeroed", P.owners.get("alpha-mod").hookCalls === 0);
+ok("compat warnings cleared", P.compat.size === 0);
+ok("owner counters zeroed", P.owners.get("alpha-mod").hookCalls === 0 && P.owners.get("alpha-mod").compatWarnings === 0);
 ok("live interval registry survives reset (it tracks real handles)", P.liveIntervals instanceof Map);
 
 /* -- analysis module ------------------------------------------------------------------------ */
@@ -474,7 +514,7 @@ globalThis.game = {
   // The client only ever knows one system: the active one. It is not in `game.modules`.
   system: { id: "dnd5e", title: "D&D Fifth Edition", version: "5.0.0" },
   world: { id: "test-world", title: "Test World" },
-  version: "14.365"
+  version: "14.370"
 };
 globalThis.game.modules.get = Map.prototype.get.bind(globalThis.game.modules);
 const analysis = await import("../module/analysis.mjs");
@@ -543,7 +583,7 @@ ok("unattributed is not claimed as installed",
 ok("unattributed is titled", census.resolvePackage("unattributed").title === "Unattributed");
 
 /* -- summary ---------------------------------------------------------------------------------- */
-console.log(`\n[1m${pass} passed, ${fail} failed[0m`);
+console.log(`\n\x1b[1m${pass} passed, ${fail} failed\x1b[0m`);
 if (fail) {
   console.log("Failures:\n" + failures.map((f2) => `  - ${f2}`).join("\n"));
   process.exit(1);

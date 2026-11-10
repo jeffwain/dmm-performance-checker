@@ -19,8 +19,14 @@ OK, that all said, from here on be AI dragons. - hightouch
 
 ## Install
 
-Copy the whole folder to `<FoundryUserData>/Data/modules/dmm-performance-checker/`, then enable
-it in Module Management.
+In Foundry's **Install Module** dialog, paste this manifest URL:
+
+```
+https://github.com/jeffwain/dmm-performance-checker/releases/latest/download/module.json
+```
+
+Or copy the whole folder to `<FoundryUserData>/Data/modules/dmm-performance-checker/`. Then
+enable it in Module Management.
 
 Open it from **Configure Settings → Module Settings → Open Performance Dashboard**, from the
 gauge button in the token scene controls, or with **Ctrl+Shift+P**.

@@ -66,7 +66,7 @@
     tickerProbe: true,     // patch PIXI.Ticker.add / addOnce
     listenerProbe: true,   // patch EventTarget.addEventListener
     netProbe: true,        // patch fetch / XMLHttpRequest
-    dbProbe: true,         // patch Document create/update/delete
+    dbProbe: true,         // patch Document create/update/delete + modifyBatch
     observerProbe: true,   // patch Mutation/Resize/IntersectionObserver + requestIdleCallback
     canvasProbe: false,    // patch PIXI.Container.addChild (heaviest; opt-in)
     overheadBudgetPct: 1.5,// self-throttle stack captures above this share of wall time
@@ -106,6 +106,8 @@
     net: new Map(),
     /** owner -> database record */
     db: new Map(),
+    /** "owner|msg" -> compatibility warning record (v14 logCompatibilityWarning calls) */
+    compat: new Map(),
     /** live handle registries for leak detection */
     liveIntervals: new Map(),   // handle -> {owner, delay, created, fires, totalMs}
     liveTimeouts: new Map(),    // handle -> {owner, delay, created}
@@ -181,8 +183,9 @@
       netRequests: 0, netBytes: 0, netTotal: 0,
       // database
       dbCreates: 0, dbUpdates: 0, dbDeletes: 0, dbDocs: 0, dbBytes: 0,
-      // errors
+      // errors + compatibility warnings
       errors: 0,
+      compatWarnings: 0,
       // long task overlap
       longTaskMs: 0,
       // muting bookkeeping
@@ -464,7 +467,7 @@
       try {
         out = fn.apply(this, args);
       } catch (err) {
-        rec.errors++; o.errors++;
+        rec.errors++;
         recordError(ownerId, err, `hook:${hookName}`);
         leave(t0, "hook", hookName);
         throw err;
@@ -474,6 +477,16 @@
       if (r.dur > rec.max) rec.max = r.dur;
       o.hookCalls++; o.hookTotal += r.dur; o.hookSelf += r.self;
       if (r.dur > o.hookMax) { o.hookMax = r.dur; o.hookMaxName = hookName; }
+      // If the callback is async and rejects later, attribute the rejection to this hook and
+      // package without swallowing or altering the returned promise.
+      if (out && typeof out.then === "function") {
+        try {
+          out.then(null, (err) => {
+            rec.errors++;
+            recordError(ownerId, err, `hook:${hookName} (async)`);
+          });
+        } catch (e) { /* ignore non-standard thenable */ }
+      }
       return out;
     };
     Object.defineProperty(wrapped, "name", { value: fn.name || "anonymous", configurable: true });
@@ -596,7 +609,10 @@
 
   function ensureLatePatches() {
     if (!P._pixiPatched && globalThis.PIXI) safe(() => patchPixi(globalThis.PIXI), "late PIXI patch");
-    if (!P._dbPatched && globalThis.foundry) safe(() => attachDbPatches(globalThis.foundry), "late DB patch");
+    if (globalThis.foundry) {
+      safe(() => attachDbPatches(globalThis.foundry), "late DB patch");
+      safe(() => attachCompatPatches(globalThis.foundry), "late compat patch");
+    }
   }
   P.hookEnvelope = new Map();
   whenGlobal("Hooks", patchHooks);
@@ -1196,24 +1212,24 @@
   patchNetwork();
 
   // =======================================================================================
-  // 6. DATABASE WRITES
+  // 6. DATABASE WRITES + v14 COMPATIBILITY WARNINGS
   // =======================================================================================
   function dbRec(id) {
     let r = P.db.get(id);
-    if (!r) P.db.set(id, (r = { owner: id, creates: 0, updates: 0, deletes: 0, docs: 0, bytes: 0, byType: new Map(), embedded: 0 }));
+    if (!r) P.db.set(id, (r = { owner: id, creates: 0, updates: 0, deletes: 0, batches: 0, docs: 0, bytes: 0, byType: new Map(), embedded: 0 }));
     return r;
   }
   function patchDatabase() {
-    if (!CFG.dbProbe) return;
-    whenGlobal("foundry", attachDbPatches);
+    whenGlobal("foundry", (F) => {
+      attachDbPatches(F);
+      attachCompatPatches(F);
+    });
   }
+  let _inEmbeddedOp = false;
   function attachDbPatches(F) {
-    if (P._dbPatched || !CFG.dbProbe) return;
-    {
-      const Doc = F?.abstract?.Document;
-      // The `foundry` namespace can be assigned before `abstract.Document` is populated,
-      // depending on core's own module graph. Bail quietly; ensureLatePatches will retry.
-      if (!Doc) return;
+    if (!CFG.dbProbe) return;
+    const Doc = F?.abstract?.Document;
+    if (Doc && !P._dbPatched) {
       P._dbPatched = true;
       const statics = ["createDocuments", "updateDocuments", "deleteDocuments"];
       for (const name of statics) {
@@ -1231,6 +1247,7 @@
             else { rec.deletes++; o.dbDeletes++; }
             const type = this?.documentName || operation?.parent?.documentName || "?";
             rec.byType.set(type, (rec.byType.get(type) || 0) + count);
+            if (operation?.parent && !_inEmbeddedOp) rec.embedded += count;
             if (name !== "deleteDocuments") {
               let bytes = 0;
               try { bytes = JSON.stringify(data)?.length || 0; } catch (e) { bytes = 0; }
@@ -1241,23 +1258,139 @@
         };
         Doc[name].__dmmPatched = true;
       }
-      // Embedded document operations route through the parent document instance.
+      // Embedded document operations (`actor.createEmbeddedDocuments("Item", data)`) delegate to
+      // `cls.createDocuments(data, operation)` in Foundry v14, but in tests or custom subclasses
+      // may not. Track `_inEmbeddedOp` and compare `rec.docs` before/after so neither path ever
+      // double-counts `byType` or `docs`.
       const proto = Doc.prototype;
       for (const name of ["createEmbeddedDocuments", "updateEmbeddedDocuments", "deleteEmbeddedDocuments"]) {
         if (typeof proto[name] !== "function") continue;
         const orig = proto[name];
         proto[name] = function (embeddedName, data) {
-          if (P.armed) {
-            const ownerId = ctx.length ? currentOwner() : attribute();
-            const rec = dbRec(ownerId);
-            rec.embedded += Array.isArray(data) ? data.length : 1;
-            rec.byType.set(embeddedName, (rec.byType.get(embeddedName) || 0) + (Array.isArray(data) ? data.length : 1));
+          if (!P.armed) return orig.apply(this, arguments);
+          const ownerId = ctx.length ? currentOwner() : attribute();
+          const rec = dbRec(ownerId);
+          const o = owner(ownerId);
+          const count = Array.isArray(data) ? data.length : 1;
+          rec.embedded += count;
+          const docsBefore = rec.docs;
+          _inEmbeddedOp = true;
+          try {
+            return orig.apply(this, arguments);
+          } finally {
+            _inEmbeddedOp = false;
+            if (rec.docs === docsBefore) {
+              // Stub or custom implementation that did not delegate to Document.*Documents.
+              rec.docs += count; o.dbDocs += count;
+              if (name === "createEmbeddedDocuments") { rec.creates++; o.dbCreates++; }
+              else if (name === "updateEmbeddedDocuments") { rec.updates++; o.dbUpdates++; }
+              else { rec.deletes++; o.dbDeletes++; }
+              rec.byType.set(embeddedName, (rec.byType.get(embeddedName) || 0) + count);
+              if (name !== "deleteEmbeddedDocuments") {
+                let bytes = 0;
+                try { bytes = JSON.stringify(data)?.length || 0; } catch (e) { bytes = 0; }
+                rec.bytes += bytes; o.dbBytes += bytes;
+              }
+            }
           }
-          return orig.apply(this, arguments);
         };
       }
       log("info", "Database probe attached.");
     }
+
+    // Foundry v14 added `foundry.documents.modifyBatch(operations)` (which delegates to
+    // `CONFIG.DatabaseBackend.modifyDocumentBatch`), bypassing `Document.*Documents` entirely.
+    const recordBatch = (operations) => {
+      if (!P.armed || !Array.isArray(operations)) return;
+      const ownerId = ctx.length ? currentOwner() : attribute();
+      const rec = dbRec(ownerId);
+      const o = owner(ownerId);
+      rec.batches = (rec.batches || 0) + 1;
+      for (const op of operations) {
+        if (!op) continue;
+        const action = op.action;
+        const arr = op.data || op.updates || op.ids;
+        const count = Array.isArray(arr) ? arr.length : 1;
+        rec.docs += count; o.dbDocs += count;
+        if (action === "create") { rec.creates++; o.dbCreates++; }
+        else if (action === "update") { rec.updates++; o.dbUpdates++; }
+        else if (action === "delete") { rec.deletes++; o.dbDeletes++; }
+        const type = op.documentName || op.parent?.documentName || "?";
+        rec.byType.set(type, (rec.byType.get(type) || 0) + count);
+        if (op.parent) rec.embedded += count;
+        if (action !== "delete" && (op.data || op.updates)) {
+          let bytes = 0;
+          try { bytes = JSON.stringify(op.data || op.updates)?.length || 0; } catch (e) { bytes = 0; }
+          rec.bytes += bytes; o.dbBytes += bytes;
+        }
+      }
+    };
+
+    const backend = globalThis.CONFIG?.DatabaseBackend;
+    if (backend && typeof backend.modifyDocumentBatch === "function" && !backend.modifyDocumentBatch.__dmmPatched) {
+      const origBatch = backend.modifyDocumentBatch;
+      const wrappedBatch = function (operations) {
+        recordBatch(operations);
+        return origBatch.apply(this, arguments);
+      };
+      wrappedBatch.__dmmPatched = true;
+      try { backend.modifyDocumentBatch = wrappedBatch; P._batchPatched = true; } catch (e) { /* frozen */ }
+    }
+    const docsNs = F?.documents;
+    if (docsNs && typeof docsNs.modifyBatch === "function" && !docsNs.modifyBatch.__dmmPatched) {
+      const origModBatch = docsNs.modifyBatch;
+      const wrappedModBatch = function (operations) {
+        // Only record here if CONFIG.DatabaseBackend wasn't already patched, so we never count twice.
+        if (!globalThis.CONFIG?.DatabaseBackend?.modifyDocumentBatch?.__dmmPatched) {
+          recordBatch(operations);
+        }
+        return origModBatch.apply(this, arguments);
+      };
+      wrappedModBatch.__dmmPatched = true;
+      try { docsNs.modifyBatch = wrappedModBatch; P._batchPatched = true; } catch (e) { /* frozen ES namespace */ }
+    }
+  }
+
+  /**
+   * Foundry v14's `foundry.utils.logCompatibilityWarning` constructs `new Error(message)` to
+   * capture a stack trace on *every single call* before checking `loggedCompatibilityWarnings.has(error.stack)`.
+   * When a module accesses a deprecated v14 getter or RenderFlag inside a hot hook or ticker,
+   * `once: true` silences the console after the first call, but the hidden `new Error()` stack
+   * construction runs thousands of times per minute.
+   */
+  function attachCompatPatches(F) {
+    if (P._compatPatched) return;
+    const utils = F?.utils;
+    if (!utils || typeof utils.logCompatibilityWarning !== "function") return;
+    const orig = utils.logCompatibilityWarning;
+    const wrapped = function (message, options) {
+      if (P.armed) {
+        const ownerId = ctx.length ? currentOwner() : attribute();
+        const o = owner(ownerId);
+        o.compatWarnings = (o.compatWarnings || 0) + 1;
+        const msg = String(message || "compatibility warning").split("\n")[0].slice(0, 140);
+        const key = `${ownerId}|${msg}`;
+        let rec = P.compat.get(key);
+        if (!rec) {
+          P.compat.set(key, (rec = {
+            owner: ownerId,
+            message: msg,
+            since: options?.since ?? null,
+            until: options?.until ?? null,
+            once: !!options?.once,
+            count: 0
+          }));
+        }
+        rec.count++;
+      }
+      return orig.apply(this, arguments);
+    };
+    wrapped.__dmmPatched = true;
+    try {
+      utils.logCompatibilityWarning = wrapped;
+      P._compatPatched = true;
+      log("info", "Compatibility warning probe attached.");
+    } catch (e) { /* frozen namespace */ }
   }
   patchDatabase();
 
@@ -1832,7 +1965,7 @@
   P.resetCounters = function () {
     for (const o of P.owners.values()) Object.assign(o, newOwner(o.id));
     P.hooks.clear(); P.listeners.clear(); P.ticker.clear(); P.observers.clear();
-    P.net.clear(); P.db.clear(); P.hookEnvelope.clear();
+    P.net.clear(); P.db.clear(); P.compat.clear(); P.hookEnvelope.clear();
     P.spans.clear(); P.longTasks.clear(); P.frames.clear();
     P.global.hookCalls = 0; P.global.hookCallbackInvocations = 0;
     P.global.domOps = 0; P.global.storageWrites = 0; P.global.storageBytes = 0;

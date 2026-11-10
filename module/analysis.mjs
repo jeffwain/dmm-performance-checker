@@ -127,6 +127,7 @@ export function scorecard({ resources = [], canvas = null, memory = null } = {})
       dbBytes: o.dbBytes,
 
       errors: o.errors,
+      compatWarnings: o.compatWarnings || 0,
       longTaskMs: o.longTaskMs,
 
       assetBytes: res?.decoded || 0,
@@ -164,6 +165,7 @@ function impactScore(r, elapsedMs) {
   s += Math.min(8, r.domOpsPerMin / 2000);                // DOM churn
   s += Math.min(6, r.liveIntervals * 1.5);                // background timers
   s += Math.min(5, r.errors / 4);                         // error storms
+  s += Math.min(5, (r.compatWarnings || 0) / 100);        // v14 deprecation warning stack-trace storms
   s += Math.min(5, r.storageWrites / 400);                // synchronous storage writes
   s += Math.min(4, r.assetBytes / (4 * 1024 * 1024));     // download/parse weight
   s += Math.min(4, r.retainedBytes / (64 * 1024 * 1024)); // retained heap proxy
@@ -411,6 +413,18 @@ export function findings(ctx) {
       add(SEV.WARN, r.id, "Exceptions thrown", `${r.errors} exceptions from this module.`, "Check the Errors tab.", `${r.errors} errors`);
     }
 
+    if (r.compatWarnings >= 100) {
+      const topCompat = [...(p.compat?.values?.() || [])]
+        .filter((c) => c.owner === r.id)
+        .sort((a, b) => b.count - a.count)[0];
+      add(r.compatWarnings >= 1000 ? SEV.CRITICAL : SEV.WARN, r.id, "Deprecation warning storm (hidden stack-trace tax)",
+        `${r.title} triggered foundry.utils.logCompatibilityWarning ${r.compatWarnings.toLocaleString()} times` +
+        (topCompat ? ` (top: "${topCompat.message}" ×${topCompat.count.toLocaleString()})` : "") +
+        `. In Foundry v14, every call constructs a new Error() and captures a stack trace before checking the deduplication Set — even when once:true silences console output after the first warning.`,
+        "Update the module for Foundry v14 or check the Errors tab for the deprecated property/method being called in a hot loop.",
+        `${r.compatWarnings.toLocaleString()} warnings`);
+    }
+
     if (r.assetBytes > 8 * 1024 * 1024) {
       add(SEV.WARN, r.id, "Very large script/asset payload",
         `${bytes(r.assetBytes)} decoded across ${r.assetCount} files, ${ms(r.assetMs)} of network time.` +
@@ -461,6 +475,14 @@ export function findings(ctx) {
       `${bytes(heapNow.used)} of ${bytes(heapNow.limit)} (${heapNow.pctOfLimit.toFixed(0)}%). Chrome/Electron will start GC-thrashing well before the hard limit, which presents as periodic multi-second freezes.`,
       "Reload between sessions is a workaround, not a fix. Find the retainer above.",
       `${heapNow.pctOfLimit.toFixed(0)}% of limit`);
+  }
+  const audioNow = memory?.audio;
+  if (audioNow && audioNow.bytes > 500 * 1024 * 1024) {
+    add(audioNow.bytes > 850 * 1024 * 1024 ? SEV.CRITICAL : SEV.WARN, "", "Large decoded audio buffer cache",
+      `Foundry's AudioBufferCache holds ${bytes(audioNow.bytes)} across ${audioNow.cached} decoded sound(s) (${audioNow.pct.toFixed(0)}% of the ${bytes(audioNow.max)} cap; ${audioNow.playing} currently playing). ` +
+      `Decoded PCM AudioBuffers live in native browser memory outside the V8 JS heap, so they inflate process RAM even when Heap looks small.`,
+      "Use streaming mode (large/long tracks) for ambient music and long soundscapes so Foundry does not decode entire tracks into memory.",
+      bytes(audioNow.bytes));
   }
 
   src = "growth";
@@ -617,6 +639,29 @@ export function findings(ctx) {
         `${c.count.toLocaleString()} stored chat messages (${bytes(c.bytes)}). All of them load into memory at world start.`,
         "Purge chat history between arcs. This directly reduces world-load time and baseline heap.",
         `${c.count.toLocaleString()} messages`);
+    }
+    if (data.v14?.trackedEffects > 500) {
+      add(data.v14.trackedEffects > 2000 ? SEV.WARN : SEV.INFO, "", "Large ActiveEffect expiry registry",
+        `game.effects is tracking ${data.v14.trackedEffects.toLocaleString()} expiry-bound ActiveEffects across actors and tokens. Foundry v14 evaluates this registry on every world-time advance and combat turn.`,
+        "Clean up expired or permanent duration effects on unused actors/scenes if advancing combat turns or world time hitches.",
+        `${data.v14.trackedEffects.toLocaleString()} tracked effects`);
+    }
+    const totalInvalid = (data.v14?.invalidDocuments || 0) +
+      (data.v14?.validationFailures || []).reduce((a, b) => a + b.count, 0);
+    if (totalInvalid > 0) {
+      const byType = (data.v14?.validationFailures || []).map((v) => `${v.type} ×${v.count}`).join(", ");
+      add(SEV.WARN, "", "Invalid documents failing schema validation",
+        `Foundry reported ${data.v14?.invalidDocuments || totalInvalid} invalid world document(s)${byType ? ` (${byType})` : ""}. Invalid documents are held aside in invalidDocumentIds and often cause modules iterating collections to throw or re-validate repeatedly.`,
+        "Check Foundry's Support Details / Client Issues dialog to inspect or delete the corrupted documents.",
+        `${data.v14?.invalidDocuments || totalInvalid} invalid`);
+    }
+    for (const uiIssue of data.v14?.usabilityIssues || []) {
+      if (uiIssue.severity === "error") {
+        add(SEV.CRITICAL, "", `Client usability issue: ${uiIssue.id}`,
+          `Foundry's ClientIssues detector flagged "${uiIssue.message}" (severity: ${uiIssue.severity}).`,
+          "Hardware acceleration or WebGL2 may be disabled in your browser/Electron settings.",
+          uiIssue.id);
+      }
     }
   }
 

@@ -1,0 +1,12 @@
+{
+  "name": "dmm-performance-checker",
+  "private": true,
+  "type": "module",
+  "description": "Foundry VTT module. No dependencies; package.json only holds the scripts.",
+  "scripts": {
+    "test": "node --experimental-vm-modules test/run.mjs && node --experimental-vm-modules test/render.mjs && node --test \"tools/*.test.mjs\"",
+    "verify": "npm test",
+    "build": "node tools/build.mjs",
+    "release": "node tools/release-cli.mjs"
+  }
+}

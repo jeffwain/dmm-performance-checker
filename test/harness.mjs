@@ -222,12 +222,24 @@ export function installHarness() {
     static createDocuments(data) { return Promise.resolve(data); }
     static updateDocuments(data) { return Promise.resolve(data); }
     static deleteDocuments(ids) { return Promise.resolve(ids); }
-    createEmbeddedDocuments(n, d) { return Promise.resolve(d); }
-    updateEmbeddedDocuments(n, d) { return Promise.resolve(d); }
-    deleteEmbeddedDocuments(n, d) { return Promise.resolve(d); }
+    // In Foundry v14, embedded document helpers delegate to the static *Documents methods.
+    createEmbeddedDocuments(n, d) { return Document.createDocuments(d); }
+    updateEmbeddedDocuments(n, d) { return Document.updateDocuments(d); }
+    deleteEmbeddedDocuments(n, d) { return Document.deleteDocuments(d); }
   }
+  globalThis.CONFIG = {
+    DatabaseBackend: {
+      modifyDocumentBatch(ops) { return Promise.resolve(ops); }
+    }
+  };
   globalThis.foundry = {
     abstract: { Document },
+    documents: {
+      modifyBatch(ops) { return globalThis.CONFIG.DatabaseBackend.modifyDocumentBatch(ops); }
+    },
+    utils: {
+      logCompatibilityWarning(message, options = {}) { return void message && void options; }
+    },
     applications: {
       instances: new Map(),
       detached: { windows: new Map() }

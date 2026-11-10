@@ -227,10 +227,11 @@ export function canvasCensus() {
     filters: [],
     filterCount: 0,
     filteredObjects: 0,
-    textures: { count: 0, bytes: 0, biggest: [] },
+    textures: { count: 0, bytes: 0, biggest: [], loaderBytes: null },
     layers: [],
     scene: null,
     tickerListeners: 0,
+    animations: 0,
     truncated: false
   };
   const canvas = globalThis.canvas;
@@ -290,24 +291,52 @@ export function canvasCensus() {
   out.filters = [...filters.values()].map((f) => ({ name: f.name, count: f.count, enabled: f.enabled, on: [...f.on].slice(0, 4).join(", ") })).sort((a, b) => b.count - a.count);
 
   // --- texture memory ---------------------------------------------------------------------
+  // In PIXI v7 / Foundry v14, textures loaded via PIXI.Assets live in `renderer.texture.managedTextures`
+  // as well as (or instead of) `BaseTextureCache`. Union both sources, deduped by BaseTexture
+  // identity, and account for KTX2/Basis compressed textures (`CompressedTextureResource`).
   const cache = globalThis.PIXI?.utils?.BaseTextureCache || globalThis.PIXI?.BaseTextureCache;
-  if (cache) {
-    const list = [];
-    let total = 0, n = 0;
-    for (const key of Object.keys(cache)) {
-      const bt = cache[key];
-      if (!bt) continue;
-      const w = bt.realWidth || bt.width || 0;
-      const h = bt.realHeight || bt.height || 0;
-      const mip = bt.mipmap ? 1.33 : 1;
-      const b = Math.round(w * h * 4 * mip);
-      total += b; n++;
-      list.push({ key: shortName(key), w, h, bytes: b });
+  const managed = r?.texture?.managedTextures;
+  const seenTex = new Set();
+  const list = [];
+  let total = 0, n = 0;
+
+  const addBaseTexture = (bt, fallbackKey) => {
+    if (!bt || typeof bt !== "object" || seenTex.has(bt)) return;
+    seenTex.add(bt);
+    const w = bt.realWidth || bt.width || 0;
+    const h = bt.realHeight || bt.height || 0;
+    if (!w && !h) return;
+    const mip = bt.mipmap ? 1.33 : 1;
+    let b = 0;
+    const res = bt.resource;
+    const CompressedRes = globalThis.PIXI?.CompressedTextureResource;
+    if ((CompressedRes && res instanceof CompressedRes) || Array.isArray(res?._levelBuffers)) {
+      const bufs = res?._levelBuffers;
+      if (Array.isArray(bufs) && bufs.length) {
+        for (const lv of bufs) b += lv?.levelBuffer?.byteLength || lv?.byteLength || 0;
+      }
+      if (!b) b = Math.round(w * h * 2 * mip);
+    } else {
+      b = Math.round(w * h * 4 * mip);
     }
-    out.textures.count = n;
-    out.textures.bytes = total;
-    out.textures.biggest = list.sort((a, b) => b.bytes - a.bytes).slice(0, 15);
+    total += b; n++;
+    const label = fallbackKey || bt.cacheId || res?.src || res?.url || `texture-${bt.uid ?? n}`;
+    list.push({ key: shortName(label), w, h, bytes: b });
+  };
+
+  if (cache) {
+    for (const key of Object.keys(cache)) addBaseTexture(cache[key], key);
   }
+  if (Array.isArray(managed)) {
+    for (const bt of managed) addBaseTexture(bt, null);
+  }
+  out.textures.count = n;
+  out.textures.bytes = total;
+  out.textures.biggest = list.sort((a, b) => b.bytes - a.bytes).slice(0, 15);
+  try {
+    const loaderMem = globalThis.foundry?.canvas?.TextureLoader?.approximateTotalMemoryUsage;
+    if (typeof loaderMem === "number" && isFinite(loaderMem)) out.textures.loaderBytes = loaderMem;
+  } catch (e) { /* ignore */ }
 
   // --- per-layer object counts -------------------------------------------------------------
   try {
@@ -358,6 +387,11 @@ export function canvasCensus() {
     let t = canvas.app?.ticker?._head, n = 0;
     while (t) { n++; t = t.next; if (n > 5000) break; }
     out.tickerListeners = n;
+  } catch (e) { /* ignore */ }
+
+  try {
+    const anims = globalThis.foundry?.canvas?.animation?.CanvasAnimation?.animations;
+    if (anims) out.animations = anims instanceof Map ? anims.size : Object.keys(anims).length;
   } catch (e) { /* ignore */ }
 
   return out;
@@ -522,7 +556,7 @@ export function domCensus() {
 }
 
 /* ---------------------------------------------------------------------------------------- */
-/* 4. Data census — flag bloat, settings bloat, compendium weight                             */
+/* 4. Data census — flag bloat, settings bloat, compendium weight, v14 health                 */
 /* ---------------------------------------------------------------------------------------- */
 
 /**
@@ -536,10 +570,17 @@ export async function dataCensus(onProgress = () => {}) {
   const game = globalThis.game;
   const out = {
     flags: [],            // {namespace, bytes, docs, biggest:{name,type,bytes}}
-    documents: [],        // {type, count, bytes}
+    documents: [],        // {type, count, bytes, invalid}
     settings: [],         // {namespace, worldBytes, clientBytes, keys}
     localStorage: { totalBytes: 0, byNamespace: [] },
     packs: [],
+    v14: {
+      trackedEffects: 0,
+      invalidDocuments: 0,
+      validationFailures: [],
+      usabilityIssues: [],
+      workers: 0
+    },
     totals: { docBytes: 0, flagBytes: 0, docs: 0, embedded: 0 },
     scanned: 0,
     error: null
@@ -574,6 +615,8 @@ export async function dataCensus(onProgress = () => {}) {
   for (const [name, coll] of collections) {
     if (!coll) continue;
     let typeBytes = 0, n = 0;
+    const invalidCount = coll.invalidDocumentIds?.size || 0;
+    out.v14.invalidDocuments += invalidCount;
     let i = 0;
     for (const doc of coll) {
       const src = doc?._source ?? doc;
@@ -582,15 +625,44 @@ export async function dataCensus(onProgress = () => {}) {
       n++;
       addFlags(src, doc?.name || doc?.id || "?", name);
 
-      // Embedded documents (tokens carry the worst flag payloads in practice).
+      // Embedded documents (tokens, ActorDelta items/effects, and Item ActiveEffects carry the
+      // worst flag payloads in practice). Prefer Foundry v14's recursive `traverseEmbeddedDocuments()`
+      // so nested levels (e.g. Scene -> Token -> ActorDelta -> Item -> ActiveEffect) are all
+      // visited; fall back to the 1-level `metadata.embedded` walk for older mocks/stubs.
       try {
-        const embeddedNames = Object.keys(doc?.constructor?.metadata?.embedded || {});
-        for (const en of embeddedNames) {
-          const ec = doc.getEmbeddedCollection?.(en);
-          if (!ec) continue;
-          for (const ed of ec) {
+        if (typeof doc.traverseEmbeddedDocuments === "function") {
+          for (const entry of doc.traverseEmbeddedDocuments()) {
+            const ed = Array.isArray(entry) ? entry[1] : entry;
+            const fieldPath = Array.isArray(entry) ? entry[0] : (ed?.documentName || ed?.collectionName || "Embedded");
             out.totals.embedded++;
-            addFlags(ed?._source ?? ed, `${doc?.name || "?"} › ${ed?.name || ed?.id || en}`, `${name}.${en}`);
+            const edSrc = ed?._source ?? ed;
+            const edType = ed?.documentName || `${name}.${fieldPath}`;
+            addFlags(edSrc, `${doc?.name || "?"} › ${ed?.name || ed?.id || fieldPath}`, edType);
+          }
+        } else {
+          const embeddedNames = Object.keys(doc?.constructor?.metadata?.embedded || {});
+          for (const en of embeddedNames) {
+            const ec = doc.getEmbeddedCollection?.(en);
+            if (!ec) continue;
+            for (const ed of ec) {
+              out.totals.embedded++;
+              const edSrc = ed?._source ?? ed;
+              addFlags(edSrc, `${doc?.name || "?"} › ${ed?.name || ed?.id || en}`, `${name}.${en}`);
+              // Also check synthetic token ActorDelta (`token.delta`) if `traverseEmbeddedDocuments` is absent.
+              const delta = ed?.delta?._source ?? edSrc?.delta;
+              if (delta) {
+                addFlags(delta, `${doc?.name || "?"} › ${ed?.name || ed?.id || en} (delta)`, `${name}.${en}.ActorDelta`);
+                for (const sub of ["items", "effects"]) {
+                  const arr = delta[sub] || ed?.delta?.[sub];
+                  if (arr) {
+                    for (const sd of arr) {
+                      out.totals.embedded++;
+                      addFlags(sd?._source ?? sd, `${doc?.name || "?"} › ${ed?.name || en} › ${sd?.name || sd?._id || sub}`, `${name}.${en}.${sub}`);
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       } catch (e) { /* ignore */ }
@@ -601,7 +673,7 @@ export async function dataCensus(onProgress = () => {}) {
       scanned++;
       if ((++i & 63) === 0) { onProgress(`${name}: ${i}/${coll.size ?? "?"}`); await yieldToUI(); }
     }
-    out.documents.push({ type: name, count: n, bytes: typeBytes });
+    out.documents.push({ type: name, count: n, bytes: typeBytes, invalid: invalidCount });
     out.totals.docBytes += typeBytes;
     out.totals.docs += n;
     onProgress(`${name} done (${n})`);
@@ -701,6 +773,33 @@ export async function dataCensus(onProgress = () => {}) {
     out.packs.sort((a, b) => b.indexed - a.indexed);
   } catch (e) { /* ignore */ }
 
+  // --- v14 world health (ActiveEffectRegistry, ClientIssues, Workers) ----------------------
+  try {
+    if (game.effects) {
+      let effCount = 0;
+      if (typeof game.effects.size === "number") effCount = game.effects.size;
+      else if (typeof game.effects[Symbol.iterator] === "function") {
+        for (const _ of game.effects) { effCount++; if (effCount >= 50000) break; }
+      }
+      out.v14.trackedEffects = effCount;
+    }
+    if (game.workers && typeof game.workers.size === "number") {
+      out.v14.workers = game.workers.size;
+    }
+    const issues = game.issues;
+    if (issues) {
+      const vf = issues.validationFailures || {};
+      for (const [docType, byUuid] of Object.entries(vf)) {
+        const count = byUuid && typeof byUuid === "object" ? Object.keys(byUuid).length : 0;
+        if (count > 0) out.v14.validationFailures.push({ type: docType, count });
+      }
+      const uiIssues = issues.usabilityIssues || {};
+      for (const [id, issue] of Object.entries(uiIssues)) {
+        out.v14.usabilityIssues.push({ id, severity: issue?.severity || "warning", message: issue?.message || id });
+      }
+    }
+  } catch (e) { /* ignore */ }
+
   return out;
 }
 
@@ -712,6 +811,8 @@ export function memoryCensus() {
   const game = globalThis.game;
   const out = {
     heap: null,
+    audio: null,
+    workers: [],
     modules: [],
     newGlobals: [],
     probeSelf: null
@@ -725,6 +826,33 @@ export function memoryCensus() {
       pctOfLimit: (mem.usedJSHeapSize / mem.jsHeapSizeLimit) * 100
     };
   }
+
+  // Foundry v14 AudioBufferCache (`game.audio.buffers`): holds up to 1 GB of decoded PCM
+  // AudioBuffers in native browser memory outside the V8 JS heap.
+  try {
+    const buffers = game?.audio?.buffers;
+    const usage = buffers?.usage;
+    const curBytes = usage?.current ?? usage?.bytes;
+    if (usage && typeof curBytes === "number") {
+      const rawPct = usage.pct || 0;
+      out.audio = {
+        bytes: curBytes,
+        max: usage.max || 0,
+        pct: rawPct <= 1 && rawPct > 0 ? rawPct * 100 : rawPct,
+        cached: buffers.size ?? usage.cached ?? 0,
+        playing: game.audio?.playing?.size ?? usage.playing ?? 0
+      };
+    }
+  } catch (e) { /* ignore */ }
+
+  // Foundry v14 WorkerManager (`game.workers`): active background Web Workers.
+  try {
+    if (game?.workers && typeof game.workers.entries === "function") {
+      for (const [name, w] of game.workers.entries()) {
+        out.workers.push({ name: String(name), ready: !!w?.ready });
+      }
+    }
+  } catch (e) { /* ignore */ }
 
   // Per-module API surface. Most modules park their caches on module.api / module.instance /
   // a global. This is where index-building modules (search, compendium browsers) hide.
@@ -770,7 +898,7 @@ export function memoryCensus() {
   if (p) {
     const r = estimateSize({
       owners: p.owners, hooks: p.hooks, listeners: p.listeners, ticker: p.ticker,
-      net: p.net, db: p.db, spans: p.spans.buf, samples: p.samples.buf, frames: p.frames.buf
+      net: p.net, db: p.db, compat: p.compat, spans: p.spans.buf, samples: p.samples.buf, frames: p.frames.buf
     }, { maxNodes: 300000, maxDepth: 8 });
     out.probeSelf = {
       bytes: r.bytes,
