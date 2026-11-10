@@ -322,8 +322,11 @@ ok("probe overhead tracked", P.overhead.stackCaptures > 0);
 // run: this suite registers ~500 listeners with a fresh closure each in a fraction of a second,
 // which is a far higher attribution rate than any real session, against a denominator of only a
 // few seconds of wall clock. Per-capture cost is the invariant that actually generalises.
+// Shared CI runners measure ~3x slower than a dev machine (~25 µs vs ~8 µs), so they get room;
+// the budget is there to catch a capture that got many times more expensive, not runner noise.
 const nsPerCapture = (P.overhead.stackMs / P.overhead.stackCaptures) * 1e6;
-ok("stack capture cost is bounded", nsPerCapture < 25000,
+const captureBudget = process.env.CI ? 100000 : 25000;
+ok("stack capture cost is bounded", nsPerCapture < captureBudget,
   `${nsPerCapture.toFixed(0)} ns/capture over ${P.overhead.stackCaptures} captures`);
 // Attribution must be derived once per function, not once per registration.
 const sharedFn = () => {};
