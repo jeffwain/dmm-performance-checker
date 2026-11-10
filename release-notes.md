@@ -1,3 +1,5 @@
+# v1.1.0
+
 - Updated the build script, fixed version number.
 
 # v0.2.0
