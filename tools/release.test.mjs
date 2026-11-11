@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   bump, compareVersions, baseVersion, resolveVersion, fill, setManifestVersion,
   parseNotes, draftNotes, finishNotes, releaseBody, pickEditor, config, MANIFEST_MARKER,
+  parseCommits, formatCommits,
 } from "./release.mjs";
 
 test("bump raises the chosen part and resets the ones below it", () => {
@@ -54,6 +55,29 @@ test("setManifestVersion changes only the version", () => {
   assert.throws(() => setManifestVersion('{ "id": "x" }', "1.1.0"));
 });
 
+test("parseCommits splits log entries and ignores release commits", () => {
+  const log = "Release v1.2.0\x1f\x1f\x1eFix issue #1\x1fDetails\x1fNote\x1eAnother fix\x1f\x1f";
+  const commits = parseCommits(log);
+  assert.deepEqual(commits, [
+    { subject: "Fix issue #1", body: "Details", notes: "Note" },
+    { subject: "Another fix", body: "", notes: "" },
+  ]);
+  assert.deepEqual(parseCommits(""), []);
+});
+
+test("formatCommits formats titles and indents bodies/notes", () => {
+  const commits = [
+    { subject: "Fix token images", body: "", notes: "" },
+    { subject: "- Already a bullet", body: "Line 1\nLine 2", notes: "" },
+    { subject: "Note with git note", body: "Body", notes: "Extra note" },
+  ];
+  assert.equal(
+    formatCommits(commits),
+    "- Fix token images\n- Already a bullet\n  Line 1\n  Line 2\n- Note with git note\n  Body\n\n  Extra note",
+  );
+  assert.equal(formatCommits([]), "");
+});
+
 const LOG = "# v1.0.1\n\n- Fixed a thing\n\n# v1.0.0 — first\n\n- Hello\n";
 const released = new Set(["1.0.0", "1.0.1"]);
 
@@ -75,6 +99,30 @@ test("draftNotes picks up an unreleased heading from a cancelled run", () => {
   const cancelled = `# v1.0.2\n\n- Drafted earlier\n\n${LOG}`;
   assert.equal(draftNotes(cancelled, "1.1.0", released), `# v1.1.0\n\n- Drafted earlier\n\n${LOG}`);
   assert.equal(draftNotes(cancelled, "1.0.2", released), cancelled, "same version, nothing moves");
+});
+
+test("draftNotes populates commit notes when draft is empty", () => {
+  const notes = draftNotes(LOG, "1.1.0", released, "- Fix foo\n- Fix bar");
+  assert.equal(
+    notes,
+    `# v1.1.0\n\n- Fix foo\n- Fix bar\n\n# v1.0.1\n\n- Fixed a thing\n\n# v1.0.0 — first\n\n- Hello\n`,
+  );
+});
+
+test("draftNotes appends commit notes when draft exists without duplicating", () => {
+  const withDraft = `## Highlights\nAwesome\n\n${LOG}`;
+  const notes = draftNotes(withDraft, "1.1.0", released, "- Fix foo");
+  assert.equal(
+    notes,
+    `# v1.1.0\n\n## Highlights\nAwesome\n\n- Fix foo\n\n# v1.0.1\n\n- Fixed a thing\n\n# v1.0.0 — first\n\n- Hello\n`,
+  );
+
+  const alreadyHas = `## Highlights\n- Fix foo\n\n${LOG}`;
+  const notes2 = draftNotes(alreadyHas, "1.1.0", released, "- Fix foo");
+  assert.equal(
+    notes2,
+    `# v1.1.0\n\n## Highlights\n- Fix foo\n\n# v1.0.1\n\n- Fixed a thing\n\n# v1.0.0 — first\n\n- Hello\n`,
+  );
 });
 
 test("draftNotes leaves a placeholder when there's no draft, and starts a new file", () => {
@@ -105,6 +153,13 @@ test("pickEditor takes the first usable editor and makes Zed and VS Code wait", 
   assert.equal(pickEditor({ env: { EDITOR: "vim" }, gitEditor: "zed --wait" }), "vim");
   assert.equal(pickEditor({ gitEditor: "true", installed: ["zed"] }), "zed --wait", "git's 'no editor' is skipped");
   assert.equal(pickEditor({ env: { EDITOR: "  " } }), null);
+});
+
+test("pickEditor prefers LAUNCH_EDITOR and installed IDE over notepad", () => {
+  assert.equal(pickEditor({ env: { LAUNCH_EDITOR: "zed" } }), "zed --wait");
+  assert.equal(pickEditor({ env: { EDITOR: "notepad" }, installed: ["zed"] }), "zed --wait");
+  assert.equal(pickEditor({ env: { EDITOR: "notepad.exe" }, installed: ["code"] }), "code --wait");
+  assert.equal(pickEditor({ env: { EDITOR: "notepad" }, installed: [] }), "notepad");
 });
 
 test("config prefers npm scripts, falls back to repo files, and lets overrides win", () => {

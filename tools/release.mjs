@@ -123,6 +123,42 @@ const COMMENTS = /<!--[\s\S]*?-->/g;
 const placeholder = (version) =>
   `<!-- Notes for v${version}: write or paste markdown, save, then close this tab. Comments are removed. -->`;
 
+/** Parses a git log format string with \x1e and \x1f into commit objects. */
+export function parseCommits(logOutput) {
+  if (!logOutput) return [];
+  return logOutput
+    .split("\x1e")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const [subject = "", body = "", notes = ""] = entry.split("\x1f").map((s) => s.trim());
+      return { subject, body, notes };
+    })
+    .filter(({ subject }) => subject && !/^Release v?\d+\.\d+\.\d+/i.test(subject));
+}
+
+/** Formats commit objects into markdown release notes (bullet points, with body/notes indented). */
+export function formatCommits(commits) {
+  if (!commits || !commits.length) return "";
+  return commits
+    .map(({ subject, body, notes }) => {
+      let title = subject.trim();
+      if (!/^[-*]\s/.test(title)) title = `- ${title}`;
+      const extra = [body, notes]
+        .filter(Boolean)
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .join("\n\n");
+      if (!extra) return title;
+      const indented = extra
+        .split("\n")
+        .map((line) => (line.trim() ? `  ${line}` : ""))
+        .join("\n");
+      return `${title}\n${indented}`;
+    })
+    .join("\n");
+}
+
 /** Splits release-notes.md into what's above the first version heading and the sections. */
 export function parseNotes(text) {
   const src = String(text ?? "").replace(/\r\n/g, "\n");
@@ -140,9 +176,10 @@ export function parseNotes(text) {
  * Moves the draft under a "# v{version}" heading at the top. The draft is the
  * text above the first heading plus any leading sections whose version was
  * never released (a cancelled run, or a version you changed your mind about).
+ * Populates with git commits since the previous release if draft is empty.
  * @param {Set<string>} released  Versions that have a tag, without the "v".
  */
-export function draftNotes(text, version, released) {
+export function draftNotes(text, version, released, commitsText = "") {
   const { preamble, sections } = parseNotes(text);
   const firstReleased = sections.findIndex((s) => released.has(s.version));
   const cut = firstReleased === -1 ? sections.length : firstReleased;
@@ -150,8 +187,11 @@ export function draftNotes(text, version, released) {
     .map((part) => part.trim())
     .filter(Boolean)
     .join("\n\n");
+  const combined = draft
+    ? (commitsText && !draft.includes(commitsText) ? `${draft}\n\n${commitsText}` : draft)
+    : (commitsText || placeholder(version));
   const rest = sections.slice(cut).map((s) => s.heading + s.body).join("").trim();
-  return `# v${version}\n\n${draft || placeholder(version)}\n${rest ? `\n${rest}\n` : ""}`;
+  return `# v${version}\n\n${combined}\n${rest ? `\n${rest}\n` : ""}`;
 }
 
 /**
@@ -183,7 +223,16 @@ export function releaseBody(notes) {
 export function pickEditor({ configured, env = {}, gitEditor, installed = [] }) {
   // "true" and ":" are how git and some tools say "no editor".
   const usable = (cmd) => Boolean(cmd?.trim()) && !["true", ":"].includes(cmd.trim());
-  const found = [configured, env.RELEASE_EDITOR, env.VISUAL, env.EDITOR, gitEditor].find(usable) ?? installed[0];
+  const isNotepad = (cmd) => {
+    if (!cmd) return false;
+    const first = cmd.trim().startsWith('"') ? cmd.trim().slice(1, cmd.trim().indexOf('"', 1)) : cmd.trim().split(/\s+/)[0];
+    const program = first.split(/[\\/]/).pop().toLowerCase().replace(/\.(exe|cmd)$/, "");
+    return program === "notepad";
+  };
+  const explicit = [configured, env.RELEASE_EDITOR, env.LAUNCH_EDITOR].find(usable);
+  const generic = [env.VISUAL, env.EDITOR, gitEditor].find(usable);
+  const ide = installed[0];
+  const found = explicit ?? (generic && !isNotepad(generic) ? generic : (ide ?? generic));
   if (!found) return null;
   const command = found.trim();
   // The program is the quoted path, or the first word; split on either slash so
@@ -238,10 +287,30 @@ async function ask(question) {
   try { return (await rl.question(question)).trim(); } finally { rl.close(); }
 }
 
+function readCommitsSince(tag) {
+  let hasTag = false;
+  if (tag) {
+    try {
+      execFileSync("git", ["rev-parse", "--verify", "--quiet", `refs/tags/${tag}`], { cwd: root });
+      hasTag = true;
+    } catch {}
+  }
+  const range = hasTag ? [`${tag}..HEAD`] : ["HEAD"];
+  try {
+    const out = execFileSync("git", ["log", ...range, "--no-merges", "--reverse", "--format=%s%x1f%b%x1f%N%x1e"], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    return parseCommits(out);
+  } catch {
+    return [];
+  }
+}
+
 /** Puts the draft under the new heading, opens it, and returns the cleaned notes. */
-async function editNotes(cfg, file, version, released, { noEdit }) {
+async function editNotes(cfg, file, version, released, commitsText, { noEdit }) {
   const original = readText(file);
-  writeText(file, draftNotes(original, version, released), original);
+  writeText(file, draftNotes(original, version, released, commitsText), original);
   if (!noEdit) {
     const gitEditor = tryRead("git", ["config", "core.editor"]);
     const editor = pickEditor({ configured: cfg.editor, env: process.env, gitEditor })
@@ -282,7 +351,7 @@ async function main(argv) {
   if (read("git", ["branch", "--show-current"]) !== cfg.branch) fail(`Switch to ${cfg.branch} first.`);
   const dirty = read("git", ["diff", "--name-only", "HEAD"]).split("\n").filter((path) => path && path !== cfg.notes);
   if (dirty.length) fail(`Commit or discard these first:\n  ${dirty.join("\n  ")}`);
-  read("git", ["fetch", "--quiet", "origin", cfg.branch]);
+  read("git", ["fetch", "--quiet", "--tags", "origin", cfg.branch]);
   if (read("git", ["rev-parse", "HEAD"]) !== read("git", ["rev-parse", `origin/${cfg.branch}`])) {
     fail(`Local ${cfg.branch} and origin/${cfg.branch} differ. Push or pull first.`);
   }
@@ -330,7 +399,10 @@ async function main(argv) {
     if (!run(build)) fail("Build failed. Nothing released.");
   }
 
-  const notes = await editNotes(cfg, notesFile, version, released, { noEdit });
+  const lastTag = base ? (base.startsWith("v") ? base : `v${base}`) : "";
+  const commits = readCommitsSince(lastTag);
+  const commitsText = formatCommits(commits);
+  const notes = await editNotes(cfg, notesFile, version, released, commitsText, { noEdit });
   console.log(notes ? `\nNotes for ${tag}:\n${notes.replace(/^/gm, "  | ")}` : `\nNo notes for ${tag}; just the generated ones.`);
 
   if (dryRun) {
@@ -373,8 +445,8 @@ async function main(argv) {
 
   const repo = repoSlug(tryRead("git", ["remote", "get-url", "origin"]), manifest.url);
   console.log(`\nReleased ${tag}.`);
+  console.log(`  Manifest:     https://github.com/${repo}/releases/latest/download/module.json`);
   console.log(`  This version: https://github.com/${repo}/releases/download/${tag}/module.json`);
-  console.log(`  Latest:       https://github.com/${repo}/releases/latest/download/module.json`);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

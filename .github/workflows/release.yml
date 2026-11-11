@@ -39,18 +39,20 @@ jobs:
       - name: Attach to the release
         run: gh release upload "$TAG" dist/module.json dist/module.zip --clobber
 
-      # This version's manifest, for installing or pinning it directly. npm run
-      # release leaves a <!-- manifest --> marker below your own notes; without
-      # one (a release made on GitHub) the link goes at the top. Skipped if the
-      # notes already have it, so re-running the job doesn't repeat it.
+      # Manifest stays on "latest" so installed copies keep finding updates;
+      # "This version" pins this release directly. npm run release leaves a
+      # <!-- manifest --> marker below your own notes; without one (a release
+      # made on GitHub) the link goes at the top. Skipped if the notes already
+      # have it, so re-running the job doesn't repeat it.
       - name: Add the manifest link to the release notes
         run: |
-          url="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/module.json"
-          link="**Manifest:** $url"
+          latest_url="https://github.com/$GITHUB_REPOSITORY/releases/latest/download/module.json"
+          version_url="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/module.json"
+          link=$(printf '**Manifest:** %s\n\n**This version:** %s' "$latest_url" "$version_url")
           marker="<!-- manifest -->"
           body=$(gh release view "$TAG" --json body --jq .body)
           case "$body" in
-            *"$url"*) exit 0 ;;
+            *"$latest_url"*) exit 0 ;;
             *"$marker"*) notes="${body/"$marker"/$link}" ;;
             *) notes=$(printf '%s\n\n%s' "$link" "$body") ;;
           esac
